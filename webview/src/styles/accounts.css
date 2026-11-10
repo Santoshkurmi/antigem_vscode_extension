@@ -1,0 +1,280 @@
+/* ui/agents/AccountsUi.kt: AccountsButton, AccountsDialog (components/Accounts.tsx). 1dp = 1px, text = sp × var(--sp).
+   Surfaces draw their 1dp border as an inset shadow: Compose draws a Surface's border over its content, it takes no room. */
+
+/* ------------------------------------------------------------------ AccountAvatar / InitialCircle */
+
+.acc-avatar {
+  position: relative;
+  flex-shrink: 0;
+}
+/* the circle: InitialCircle (accent fill, white initial) when ready, accent @ 12% with the sign-in glyph or the
+   agent's mark otherwise; the 1.5dp ring (accent @ 70%) is drawn over it */
+.acc-avatar-ring {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--acc);
+  color: #fff;
+}
+.acc-avatar-ring.idle {
+  background: color-mix(in srgb, var(--acc) 12%, transparent);
+  color: var(--acc);
+}
+.acc-avatar-ring::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--acc) 70%, transparent);
+  pointer-events: none;
+}
+.acc-initial {
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  color: #fff;
+}
+/* status badge: size × 0.38 at the bottom end, offset (2dp, 2dp), a 1.5dp surface ring around the state color */
+.acc-avatar-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  border-radius: 50%;
+  background: var(--surface);
+  padding: 1.5px;
+}
+.acc-avatar-badge > div {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+/* ------------------------------------------------------------------ AccountsButton (drawer footer) */
+
+/* Surface(shape 20dp, surfaceVariant @ 50%, border 1dp outline @ 18%), padding start 5 / end 10 / top-bottom 4 */
+.acc-button {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 4px 10px 4px 5px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--surface-variant) 50%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--outline) 18%, transparent);
+  transition: box-shadow 120ms;
+}
+.acc-button:hover {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--outline) 18%, transparent),
+    inset 0 0 0 999px color-mix(in srgb, var(--on-surface) 6%, transparent);
+}
+.acc-button:active {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--outline) 18%, transparent),
+    inset 0 0 0 999px color-mix(in srgb, var(--on-surface) 10%, transparent);
+}
+/* Row(spacedBy(-7dp)): each avatar overlaps the one before it */
+.acc-button-avatars {
+  display: flex;
+  flex-shrink: 0;
+}
+.acc-button-avatars > * + * {
+  margin-left: -7px;
+}
+.acc-button-text {
+  margin-left: 7px;
+  max-width: 104px;
+  font-size: calc(12 * var(--sp));
+  font-weight: 600;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ AccountsDialog */
+
+/* the dialog's layer: a layer on its way out (or not in yet) takes no clicks */
+.acc-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity 150ms linear;
+}
+.acc-scrim.shown {
+  opacity: 1;
+}
+.acc-scrim:not(.shown) {
+  pointer-events: none;
+}
+/* Card(shape 24dp, surface, elevation 8dp, fillMaxWidth), verticalScroll, padding 20dp */
+.acc-card {
+  width: 100%;
+  max-width: 400px;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px;
+  border-radius: 24px;
+  background: var(--surface);
+  color: var(--on-surface);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  transform: scale(0.92);
+  transition: transform 150ms var(--fast-out-slow-in);
+}
+.acc-scrim.shown .acc-card {
+  transform: none;
+}
+.acc-head {
+  display: flex;
+  align-items: center;
+}
+.acc-title {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(18 * var(--sp));
+  font-weight: 700;
+}
+.acc-sub {
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 55%, transparent);
+}
+.acc-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* AccountSection: Surface(shape 16dp, accent @ 5%, border 1dp accent @ 22%), padding 14dp */
+.acc-section {
+  padding: 14px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--acc) 5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acc) 22%, transparent);
+}
+.acc-section-head {
+  display: flex;
+  align-items: center;
+}
+.acc-section-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0 8px 0 12px;
+}
+.acc-section-title {
+  font-size: calc(14.5 * var(--sp));
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acc-section-sub {
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* StatusChip: shape 10dp, state color @ 12%, padding 8 × 3, 6dp dot, 5dp gap, 11sp semibold */
+.acc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chip) 12%, transparent);
+  color: var(--chip);
+  font-size: calc(11 * var(--sp));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.acc-chip-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--chip);
+}
+
+/* facts: FlowRow(6dp, 6dp) of 11sp medium chips (onSurface @ 75% on onSurface @ 6%, shape 8dp, padding 8 × 3) */
+.acc-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.acc-fact {
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--on-surface) 6%, transparent);
+  color: color-mix(in srgb, var(--on-surface) 75%, transparent);
+  font-size: calc(11 * var(--sp));
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* buttons: FlowRow(8dp, 6dp), items top-aligned */
+.acc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  column-gap: 8px;
+  row-gap: 6px;
+  margin-top: 10px;
+}
+/* SectionButton: TextButton (min 58 × 40dp, padding 10 × 4, labelLarge line height), 15dp icon, 12.5sp medium */
+.acc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 58px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 500;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 80%, transparent);
+  transition: background-color 120ms;
+}
+.acc-btn:hover {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.acc-btn:active {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+/* SectionButton(primary = accent): Surface(shape 12dp, accent), white 12.5sp semibold, padding 14 × 7 */
+.acc-btn-primary {
+  padding: 7px 14px;
+  border-radius: 12px;
+  background: var(--acc);
+  color: #fff;
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 600;
+  white-space: nowrap;
+  transition: filter 120ms;
+}
+.acc-btn-primary:hover {
+  filter: brightness(1.08);
+}
+.acc-btn-primary:active {
+  filter: brightness(0.94);
+}

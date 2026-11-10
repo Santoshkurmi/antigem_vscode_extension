@@ -1,0 +1,407 @@
+/*
+ * Media in chat messages (components/Media.tsx): FullScreenImageDialog.kt, MarkdownImageView, YouTubeVideoView and
+ * ChatVideoPlayer's idle card. Sizes: 1dp = 1px; text = sp × var(--sp). Text these views draw without a style of
+ * their own takes MaterialTheme's bodyLarge line height (24sp) and letter spacing (0.5sp), as in the app.
+ */
+
+.mimg,
+.vl,
+.yt-card,
+.iv {
+  white-space: normal;
+}
+
+/* ------------------------------------------------------------------ shared */
+
+/* alt text / caption under an image or a video: 11.5sp italic, onSurface 60%, centered */
+.media-caption {
+  margin-top: 4px;
+  font-size: calc(11.5 * var(--sp));
+  font-style: italic;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* indeterminate CircularProgressIndicator: 24dp, 2dp stroke, primary */
+.media-spinner {
+  display: block;
+  flex-shrink: 0;
+  color: var(--primary);
+  animation: media-rotate 1400ms linear infinite;
+}
+.media-spinner circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-dasharray: 1 200;
+  stroke-dashoffset: 0;
+  animation: media-dash 1400ms ease-in-out infinite;
+}
+@keyframes media-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes media-dash {
+  0% {
+    stroke-dasharray: 1 200;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 49 200;
+    stroke-dashoffset: -19;
+  }
+  100% {
+    stroke-dasharray: 49 200;
+    stroke-dashoffset: -68;
+  }
+}
+
+/* ------------------------------------------------------------------ markdown image (MarkdownImageView) */
+
+.mimg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 6px 0;
+}
+.mimg-frame {
+  position: relative;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-variant) 30%, transparent);
+  cursor: pointer;
+}
+/* Modifier.border draws over the content */
+.mimg-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 1px solid color-mix(in srgb, var(--on-surface) 10%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+}
+/* fillMaxWidth().heightIn(min = 120.dp, max = 340.dp), content centered */
+.mimg-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 120px;
+  max-height: 340px;
+}
+/* AsyncImage(fillMaxWidth, ContentScale.Fit), Coil's 200 ms crossfade */
+.mimg-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 200ms linear;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+/* not loaded yet: takes no room (the box keeps its 120dp minimum, with the spinner) */
+.mimg-img:not(.loaded) {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+}
+.mimg-img.loaded {
+  opacity: 1;
+}
+.mimg-img.broken {
+  display: none;
+}
+.mimg-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px;
+}
+.mimg-error-text {
+  margin-top: 4px;
+  font-size: calc(11 * var(--sp));
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  color: var(--on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ YouTube card (YouTubeVideoView) */
+
+.yt-card {
+  position: relative;
+  width: 100%;
+  margin: 6px 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-variant) 35%, transparent);
+}
+.yt-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.yt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+.yt-head-main {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.yt-badge {
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #ff0000;
+}
+/* labelLarge, SemiBold */
+.yt-title {
+  min-width: 0;
+  font-size: calc(14 * var(--sp));
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  font-weight: 600;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.yt-media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0 0 14px 14px;
+  overflow: hidden;
+  background: #000;
+  cursor: pointer;
+}
+.yt-thumb {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.yt-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.45));
+}
+/* Surface(RoundedCornerShape(18.dp), Red 92%, shadowElevation = 6.dp), 62×42dp */
+.yt-play {
+  position: relative;
+  width: 62px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: rgba(255, 0, 0, 0.92);
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.2),
+    0 6px 10px 0 rgba(0, 0, 0, 0.14),
+    0 1px 18px 0 rgba(0, 0, 0, 0.12);
+  transition: background-color 120ms;
+}
+.yt-media:hover .yt-play {
+  background: #ff0000;
+}
+
+/* ------------------------------------------------------------------ video link card (ChatVideoPlayer, idle) */
+
+.vl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 6px 0;
+}
+/* heightIn(max = 420.dp).aspectRatio(16 / 9): full width until it would be taller than 420dp */
+.vl-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, calc(420px * 16 / 9));
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  cursor: pointer;
+}
+.vl-thumb {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+/* PlayDisc: 52dp circle, black 50%, icon 60% */
+.vl-disc {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  transition: background-color 120ms;
+}
+.vl-box:hover .vl-disc {
+  background: rgba(0, 0, 0, 0.62);
+}
+.vl-length {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: calc(11.5 * var(--sp));
+  font-weight: 500;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+
+/* ------------------------------------------------------------------ full-screen image viewer (FullScreenImageDialog) */
+
+.iv {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--terminal-bg) 96%, transparent);
+  color: #fff;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 150ms linear;
+}
+.iv.shown {
+  opacity: 1;
+}
+.iv:not(.shown) {
+  pointer-events: none;
+}
+.iv-stage {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  cursor: zoom-in;
+}
+.iv-stage.zoomed {
+  cursor: grab;
+}
+.iv-stage.dragging {
+  cursor: grabbing;
+}
+/* fillMaxSize().padding(16.dp), ContentScale.Fit, graphicsLayer(scale, translation) around the center */
+.iv-img {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: block;
+  width: calc(100% - 32px);
+  height: calc(100% - 32px);
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+/* the top bar only takes clicks on its buttons: drags across it still reach the image, as in the app */
+.iv-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  pointer-events: none;
+}
+.iv-btn {
+  pointer-events: auto;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  transition: background-color 120ms;
+}
+.iv-btn:hover {
+  background: rgba(255, 255, 255, 0.23);
+}
+.iv-btn:active {
+  background: rgba(255, 255, 255, 0.3);
+}
+.iv-btn-reset {
+  margin-right: 8px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.iv-btn-reset:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.iv-title {
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+  font-size: calc(14 * var(--sp));
+  font-weight: 500;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* the editor tab is wide: a video card the size of a large thumbnail, not of the whole column */
+.app.wide .yt-card,
+.app.wide .vl-box {
+  max-width: 560px;
+}

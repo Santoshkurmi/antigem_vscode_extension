@@ -1,0 +1,17 @@
+# Build outputs (not source)
+node_modules/
+.bin-stash/
+dist/
+bin/
+*.vsix
+.vscode-test/
+
+# Never ignore source code (transparency for reviewers)
+!bridge/
+!src/
+!shared/
+!webview/src/
+!webview/vite.config.ts
+!webview/tsconfig.json
+!scripts/
+!BUILDING.md

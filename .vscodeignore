@@ -1,0 +1,24 @@
+**
+# Staging (not shipped)
+.bin-stash/
+# Runtime (required)
+!dist/extension.js
+!dist/proto/**
+!dist/webview/**
+!bin/**
+!media/**
+# Manifest & docs
+!package.json
+!README.md
+!BUILDING.md
+!LICENSE
+# Source code (shipped for transparency / reviewer verification)
+!bridge/**
+!src/**
+!shared/**
+!webview/src/**
+!webview/vite.config.ts
+!webview/tsconfig.json
+!tsconfig.json
+!esbuild.mjs
+!scripts/**

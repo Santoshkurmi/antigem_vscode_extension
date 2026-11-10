@@ -1,0 +1,187 @@
+/*
+ * The app's theme tokens (theme/AppTheme.kt) as CSS custom properties.
+ * Dark = "Midnight Aurora" (BuiltInThemes.midnightAurora, every color set by hand),
+ * Light = "Porcelain" (BuiltInThemes.antigem(false)); Material slots Porcelain leaves unset fall back to
+ * Material 3's baseline light scheme, exactly as ThemeTokens.scheme() does in the app.
+ * <html data-theme="dark|light"> is set by theme.ts (VS Code body class, or prefers-color-scheme in a browser).
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --primary: #a78bfa;
+  --on-primary: #14102b;
+  --primary-container: #373256;
+  --on-primary-container: #c4b5fe;
+  --secondary: #7c6ae6;
+  --tertiary: #5eead4;
+  --background: #0a0b14;
+  --on-background: #e8eaf6;
+  --surface: #0f111c;
+  --on-surface: #e8eaf6;
+  --surface-variant: #1c2033;
+  --on-surface-variant: #9aa1bf;
+  --surface-container-lowest: #030408;
+  --surface-container-low: #0f111d;
+  --surface-container: #151826;
+  --surface-container-high: #1f2231;
+  --surface-container-highest: #262938;
+  --outline: #3a4066;
+  --outline-variant: #23283f;
+  --error: #fb7185;
+  --on-error: #111111;
+  --error-container: #492b38;
+  --on-error-container: #ff9ea9;
+  --inverse-surface: #e8eaf6;
+  --inverse-on-surface: #0a0b14;
+  --card: #151826;
+  --text-secondary: #9aa1bf;
+  --user-bubble: #252a47;
+  --thinking-bg: #12152a;
+  --code-bg: #0c0e19;
+  --code-text: #d6dbf5;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #fb7185;
+  --info: #60a5fa;
+  --accent-alt: #c084fc;
+  --syntax-keyword: #c4a7ff;
+  --syntax-type: #5eead4;
+  --syntax-string: #9ae6b4;
+  --syntax-number: #ffb86b;
+  --syntax-comment: #5b6285;
+  --syntax-function: #7db5ff;
+  --syntax-annotation: #f4a9d8;
+  --syntax-punctuation: #8991b3;
+  --border: #2d313f;
+  --fill: #212432;
+  --success-container: #1c302e;
+  --warning-container: #322d27;
+  --danger-container: #34222e;
+  --info-container: #1d283e;
+  --accent-teal: #2dd4bf;
+  --editor-bg: #0c0e19;
+  --editor-panel: #141622;
+  --editor-text: #d6dbf5;
+  --editor-muted: #676b7e;
+  --editor-border: #252735;
+  --editor-added-bg: #1c3530;
+  --editor-added-text: #9cdebd;
+  --editor-removed-bg: #39232f;
+  --editor-removed-text: #efaabd;
+  --editor-info-bg: #1a253b;
+  --editor-info-text: #86b6fa;
+  --terminal-bg: #0c0e19;
+  /* ChatInputBar: Color.White @ 8% in dark, onSurface @ 12% in light */
+  --composer-border: rgba(255, 255, 255, 0.08);
+  /* CodeBlock draws its border/dividers in white on code_bg in both themes */
+  --code-line: rgba(255, 255, 255, 0.08);
+  --scrim: rgba(0, 0, 0, 0.32);
+  --swatch-ring: rgba(255, 255, 255, 0.5);
+  --is-dark: 1;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --primary: #d97706;
+  --on-primary: #ffffff;
+  --primary-container: #eaddff;
+  --on-primary-container: #4f378b;
+  --secondary: #b45309;
+  --tertiary: #7d5260;
+  --background: #f9f9fb;
+  --on-background: #1c1917;
+  --surface: #f9f9fb;
+  --on-surface: #1c1917;
+  --surface-variant: #e8eaed;
+  --on-surface-variant: #49454f;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f7f2fa;
+  --surface-container: #f3edf7;
+  --surface-container-high: #ece6f0;
+  --surface-container-highest: #e6e0e9;
+  --outline: #79747e;
+  --outline-variant: #cac4d0;
+  --error: #b3261e;
+  --on-error: #ffffff;
+  --error-container: #f9dedc;
+  --on-error-container: #8c1d18;
+  --inverse-surface: #313033;
+  --inverse-on-surface: #f4eff4;
+  --card: #ffffff;
+  --text-secondary: #78716c;
+  --user-bubble: #e8eaed;
+  --thinking-bg: #f1f3f5;
+  --code-bg: #1e1e1c;
+  --code-text: #f5f5f4;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #3b82f6;
+  --accent-alt: #8b5cf6;
+  --syntax-keyword: #c678dd;
+  --syntax-type: #e5c07b;
+  --syntax-string: #98c379;
+  --syntax-number: #d19a66;
+  --syntax-comment: #7f848e;
+  --syntax-function: #61afef;
+  --syntax-annotation: #e5c07b;
+  --syntax-punctuation: #abb2bf;
+  --border: #e5e7eb;
+  --fill: #f3f4f6;
+  --success-container: #e8f5e9;
+  --warning-container: #fff3e0;
+  --danger-container: #fef2f2;
+  --info-container: #e3f2fd;
+  --accent-teal: #00acc1;
+  --editor-bg: #1e1e1e;
+  --editor-panel: #252526;
+  --editor-text: #d4d4d4;
+  --editor-muted: #888888;
+  --editor-border: #3c3c3c;
+  --editor-added-bg: #1b4728;
+  --editor-added-text: #b9f6ca;
+  --editor-removed-bg: #4b1e1e;
+  --editor-removed-text: #ffcdd2;
+  --editor-info-bg: #1e293b;
+  --editor-info-text: #90caf9;
+  --terminal-bg: #000000;
+  --composer-border: color-mix(in srgb, var(--on-surface) 12%, transparent);
+  --code-line: rgba(255, 255, 255, 0.08);
+  --scrim: rgba(0, 0, 0, 0.32);
+  --swatch-ring: rgba(0, 0, 0, 0.25);
+  --is-dark: 0;
+}
+
+:root {
+  /* Agent accents (ui/components/AgentPicker.kt) */
+  --agy: #3b82f6;
+  --claude: #d97757;
+  --opencode: #10b981;
+  --codex: #8b5cf6;
+
+  /*
+   * 1dp = 1px (a ~400px sidebar is laid out exactly like a ~411dp phone); text is scaled a little below 1sp = 1px
+   * so the phone's 14sp body reads ~13.5px on a desktop.
+   */
+  --sp: 0.965px;
+
+  --font: Roboto, var(--vscode-font-family, system-ui), -apple-system, 'Segoe UI', Ubuntu, sans-serif;
+  --mono: var(--vscode-editor-font-family, ui-monospace), 'Roboto Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* Compose easings and springs */
+  --fast-out-slow-in: cubic-bezier(0.4, 0, 0.2, 1);
+  --linear-out-slow-in: cubic-bezier(0, 0, 0.2, 1);
+  --fast-out-linear-in: cubic-bezier(0.4, 0, 1, 1);
+  /* spring(stiffness = StiffnessMediumLow): AnimatedVisibility expand/shrink/fade/scale defaults */
+  --spring-ml-dur: 423ms;
+  --spring-ml: linear(0, 0.0493, 0.1575, 0.2854, 0.4116, 0.5259, 0.6242, 0.706, 0.7723, 0.8252, 0.8667, 0.899, 0.9239, 0.9429, 0.9573, 0.9682, 0.9764, 0.9825, 0.9871, 0.9905, 0.993, 0.9949, 0.9962, 0.9973, 1);
+  /* spring() default (StiffnessMedium): animate*AsState */
+  --spring-m-dur: 218ms;
+  --spring-m: linear(0, 0.081, 0.2415, 0.4106, 0.5595, 0.6795, 0.7714, 0.8394, 0.8885, 0.9234, 0.9478, 0.9646, 0.9762, 0.984, 0.9894, 0.9929, 0.9953, 0.9969, 1);
+  /* Material 3 default spatial spring (damping 0.9, stiffness 700): drawer and bottom sheet */
+  --spring-spatial-dur: 300ms;
+  --spring-spatial: linear(0, 0.0189, 0.0669, 0.1332, 0.2098, 0.2907, 0.3717, 0.4499, 0.5234, 0.591, 0.6521, 0.7067, 0.7547, 0.7965, 0.8326, 0.8634, 0.8895, 0.9114, 0.9297, 0.9448, 0.9571, 0.9672, 0.9753, 0.9817, 0.9868, 0.9908, 0.9939, 0.9962, 1);
+  /* model picker tier highlight: spring(dampingRatio = 0.78, stiffness = StiffnessMediumLow) */
+  --spring-tier-dur: 396ms;
+  --spring-tier: linear(0, 0.0345, 0.1187, 0.2295, 0.3503, 0.4698, 0.5807, 0.6789, 0.7628, 0.832, 0.8873, 0.9301, 0.9621, 0.9851, 1.0009, 1.011, 1.0168, 1.0194, 1.0199, 1.0189, 1.017, 1.0148, 1.0123, 1.01, 1.0078, 1.0059, 1.0044, 1.003, 1);
+}

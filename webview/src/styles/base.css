@@ -1,0 +1,707 @@
+/* Base, layout and the Material stand-ins (primitives.tsx). Sizes: 1dp = 1px; text = sp × var(--sp). */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/*
+ * VS Code injects a default stylesheet into every webview (body padding 0 20px, a boxed background and padding on
+ * every <code>, link colors, blockquote / kbd colors, img max sizes, focus outlines on inputs, scrollbar colors).
+ * vscodeReset.ts removes it; these rules undo it anyway, for the whole document (the app and every portal: sheets,
+ * dialogs, menus, the fullscreen code view, toasts). Each one is one step more specific than VS Code's (`body code`
+ * over `code` / `pre code`, `body a:hover` over `a:hover`), so any rule of ours with a class still wins.
+ */
+html body {
+  margin: 0;
+  padding: 0;
+  font-weight: 400;
+  background: var(--background);
+  overscroll-behavior-x: none;
+}
+html,
+html body {
+  scrollbar-color: auto;
+}
+body code,
+body pre code,
+body a code {
+  background: none;
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+}
+body a,
+body p > a,
+body a:hover {
+  color: inherit;
+  text-decoration: none;
+}
+body blockquote {
+  background: none;
+  border: 0;
+}
+body kbd {
+  background: none;
+  color: inherit;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  vertical-align: baseline;
+}
+body img,
+body video {
+  max-width: 100%;
+  max-height: none;
+}
+body a:focus,
+body input:focus,
+body select:focus,
+body textarea:focus,
+body button:focus {
+  outline: none;
+}
+body a:focus-visible,
+body button:focus-visible,
+body [tabindex]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  outline-offset: 1px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/*
+ * Compose Text without an explicit style inherits MaterialTheme's bodyLarge (Type.kt: 16sp / 24sp line height /
+ * 0.5sp letter spacing) and only overrides what it sets: so most labels are 24sp tall and slightly spaced. Text that
+ * passes its own TextStyle (markdown, code, the working row, the top bar title) resets these below.
+ */
+body {
+  background: var(--background);
+  color: var(--on-surface);
+  font-family: var(--font);
+  font-size: calc(14 * var(--sp));
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+button:disabled {
+  cursor: default;
+}
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+::selection {
+  background: color-mix(in srgb, var(--primary) 32%, transparent);
+}
+
+/* thin, quiet scrollbars (Android shows none) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--on-surface) 18%, transparent) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--on-surface) 16%, transparent);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--on-surface) 28%, transparent);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.icon {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.flex1 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.row-center {
+  display: inline-flex;
+  align-items: center;
+}
+.muted {
+  color: var(--on-surface-variant);
+}
+
+/* ------------------------------------------------------------------ app shell */
+
+.app {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  overflow: hidden;
+  /* clip, not just hide: focusing something inside an overlay that is still off-screen (the settings page sliding in)
+     must not scroll the whole app sideways */
+  overflow: clip;
+}
+.screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.column {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.app.wide .column {
+  max-width: 820px;
+}
+.feed-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.controls-slot:empty {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ AnimatedVisibility */
+
+.collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--c-dur, var(--spring-ml-dur)) var(--c-ease, var(--spring-ml)),
+    opacity var(--c-dur, var(--spring-ml-dur)) var(--spring-ml);
+}
+.collapse.no-fade {
+  opacity: 1;
+}
+.collapse.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fade {
+  opacity: 0;
+  transform: scale(var(--fade-scale, 1));
+  transition:
+    opacity var(--spring-ml-dur) var(--spring-ml),
+    transform var(--spring-ml-dur) var(--spring-ml);
+}
+.fade.shown {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinning .icon {
+  animation: spin 800ms linear infinite;
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+  transition: background-color 120ms;
+}
+.icon-btn:hover {
+  background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+.icon-btn:active {
+  background: color-mix(in srgb, var(--on-surface) 12%, transparent);
+}
+
+/* Material3 buttons / menus / dialogs use labelLarge (0.1sp) and bodyMedium (0.25sp) */
+.text-btn,
+.filled-btn,
+.outlined-btn,
+.menu-item {
+  letter-spacing: calc(0.1 * var(--sp));
+  line-height: calc(20 * var(--sp));
+}
+.dialog-title {
+  letter-spacing: 0;
+}
+.dialog-body {
+  letter-spacing: calc(0.25 * var(--sp));
+}
+
+/* Material3 TextButton */
+.text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 20px;
+  font-size: calc(14 * var(--sp));
+  font-weight: 500;
+  color: var(--primary);
+  letter-spacing: 0.1px;
+  transition: background-color 120ms;
+}
+.text-btn:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.text-btn.strong {
+  font-weight: 700;
+}
+.text-btn.muted {
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.text-btn:disabled {
+  opacity: 0.38;
+}
+.text-btn.wide {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Material3 Button (filled) */
+.filled-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  font-size: calc(13 * var(--sp));
+  font-weight: 600;
+  transition: filter 120ms, opacity 120ms;
+  white-space: nowrap;
+}
+.filled-btn:hover {
+  filter: brightness(1.08);
+}
+.filled-btn:active {
+  filter: brightness(0.94);
+}
+.filled-btn:disabled {
+  opacity: 0.38;
+  filter: grayscale(0.4);
+}
+.filled-btn.small {
+  height: 36px;
+  padding: 0 16px;
+}
+.filled-btn.wide {
+  width: 100%;
+}
+.filled-btn.allow {
+  background: var(--success);
+  color: #fff;
+}
+
+/* Material3 OutlinedButton */
+.outlined-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  font-size: calc(13 * var(--sp));
+  color: var(--on-surface);
+  transition: background-color 120ms;
+}
+.outlined-btn:hover {
+  background: color-mix(in srgb, var(--on-surface) 6%, transparent);
+}
+.outlined-btn.wide {
+  width: 100%;
+}
+
+/* OutlinedTextField */
+.outlined-field {
+  display: block;
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--outline);
+  border-radius: 12px;
+  background: transparent;
+  padding: 10px 14px;
+  font-size: calc(14 * var(--sp));
+  line-height: 1.45;
+  color: var(--on-surface);
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.outlined-field:focus {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.outlined-field::placeholder {
+  color: color-mix(in srgb, var(--on-surface-variant) 80%, transparent);
+}
+.outlined-field.single {
+  height: 48px;
+}
+
+/* ------------------------------------------------------------------ dropdown menu */
+
+.menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 112px;
+  max-width: 320px;
+  padding: 8px 0;
+  border-radius: 4px;
+  background: var(--surface-container);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.25),
+    0 8px 24px rgba(0, 0, 0, 0.22);
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity 75ms linear,
+    transform 75ms var(--fast-out-linear-in);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+.menu.shown {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 30ms linear,
+    transform 120ms var(--linear-out-slow-in);
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  font-size: calc(13.5 * var(--sp));
+  color: var(--on-surface);
+  transition: background-color 100ms;
+}
+.menu-item:hover {
+  background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+.menu-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 6px 0;
+}
+.menu-item-desc {
+  font-size: calc(11.5 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 55%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: color-mix(in srgb, var(--outline-variant) 25%, transparent);
+}
+
+/* ------------------------------------------------------------------ dialog (AlertDialog) */
+
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity 150ms linear;
+}
+.dialog-scrim.shown {
+  opacity: 1;
+}
+.dialog {
+  width: 100%;
+  max-width: 400px;
+  min-width: 280px;
+  padding: 24px;
+  background: var(--surface-container-high);
+  color: var(--on-surface);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  transform: scale(0.92);
+  transition: transform 150ms var(--fast-out-slow-in);
+}
+.dialog-scrim.shown .dialog {
+  transform: none;
+}
+.dialog-icon {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.dialog-title {
+  font-size: calc(18 * var(--sp));
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 16px;
+}
+.dialog-title.centered {
+  text-align: center;
+}
+.dialog-body {
+  font-size: calc(14 * var(--sp));
+  line-height: calc(20 * var(--sp));
+  color: var(--on-surface-variant);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+/* a layer on its way out (or not in yet) takes no clicks: the first click after Escape or an outside tap reaches the
+   control under it (Compose stops dispatching to a dismissed dialog / sheet / popup at once) */
+.dialog-scrim:not(.shown),
+.sheet-scrim:not(.shown),
+.sheet-wrap:not(.shown) .sheet,
+.menu:not(.shown),
+.fade:not(.shown),
+.settings:not(.shown) {
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ bottom sheet */
+
+.sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--spring-spatial-dur) linear;
+}
+.sheet-scrim.shown {
+  opacity: 1;
+}
+.sheet-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 901;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.sheet {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 640px;
+  max-height: min(88vh, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  border-radius: 24px 24px 0 0;
+  box-shadow: 0 -2px 18px rgba(0, 0, 0, 0.3);
+  transform: translateY(100%);
+  transition: transform var(--spring-spatial-dur) var(--spring-spatial);
+  padding: 0 18px 16px;
+}
+.sheet-wrap.shown .sheet {
+  transform: none;
+}
+.sheet-handle-area {
+  display: flex;
+  justify-content: center;
+  padding: 22px 0;
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+}
+.sheet-handle {
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--on-surface-variant) 40%, transparent);
+}
+
+/* ------------------------------------------------------------------ toasts (ChatToastBanner) */
+
+.toasts {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px 10px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  background: var(--card);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  animation: toast-in var(--spring-ml-dur) var(--spring-ml);
+}
+.toast .toast-icon {
+  color: var(--primary);
+}
+.toast.success {
+  background: var(--success-container);
+  border-color: color-mix(in srgb, var(--success) 70%, transparent);
+}
+.toast.success .toast-icon {
+  color: var(--success);
+}
+.toast.error {
+  background: var(--danger-container);
+  border-color: color-mix(in srgb, var(--danger) 70%, transparent);
+}
+.toast.error .toast-icon {
+  color: var(--danger);
+}
+.toast.warning {
+  background: var(--warning-container);
+  border-color: color-mix(in srgb, var(--warning) 70%, transparent);
+}
+.toast.warning .toast-icon {
+  color: var(--warning);
+}
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--on-background);
+  font-size: calc(13.5 * var(--sp));
+  font-weight: 500;
+  line-height: calc(18 * var(--sp));
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.toast .icon-btn {
+  color: color-mix(in srgb, var(--on-background) 60%, transparent);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+
+/* ------------------------------------------------------------------ shimmer (shimmerBrush) */
+
+.shimmer {
+  display: block;
+  flex-shrink: 0;
+  background-color: color-mix(in srgb, var(--surface-variant) 65%, transparent);
+  background-image: linear-gradient(
+    135deg,
+    transparent 0%,
+    transparent 35%,
+    color-mix(in srgb, var(--background) 45%, transparent) 50%,
+    transparent 65%,
+    transparent 100%
+  );
+  background-size: 800px 800px;
+  background-repeat: no-repeat;
+  animation: shimmer 1100ms linear infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: -800px -800px;
+  }
+  to {
+    background-position: 400px 400px;
+  }
+}
+
+.mini-spinner {
+  width: 14px;
+  height: 14px;
+  margin: 0 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-secondary);
+  border-right-color: transparent;
+  animation: spin 800ms linear infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Dev only (not part of the build): shows the mock at fixed sizes, e.g.
+     /frame.html?w=400&h=860&q=mock  ·  /frame.html?w=1100&h=860&q=mock%26view=panel%26theme=light -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AntiGem frame</title>
+    <style>
+      body { margin: 0; background: #444; display: flex; gap: 16px; padding: 12px; align-items: flex-start; overflow: hidden; }
+      iframe { border: 0; background: #000; box-shadow: 0 0 0 1px #666; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      const p = new URLSearchParams(location.search);
+      for (const w of (p.get('w') ?? '400').split(',')) {
+        const f = document.createElement('iframe');
+        f.width = w;
+        f.height = p.get('h') ?? '860';
+        f.src = '/?' + (p.get('q') ?? 'mock');
+        document.body.appendChild(f);
+      }
+    </script>
+  </body>
+</html>

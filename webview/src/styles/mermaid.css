@@ -1,0 +1,224 @@
+/* MermaidDiagramView + MermaidFullscreenDialog (ui/components/MarkdownContent.kt). ClaudeTerracotta = the theme's
+   primary (theme/Color.kt), as in CodeBlock's language label. */
+
+.mmd-card {
+  margin: 6px 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-variant) 35%, transparent);
+  border: 1px solid color-mix(in srgb, var(--on-surface) 10%, transparent);
+  overflow: hidden;
+  color: var(--on-surface);
+  /* Compose Text inherits bodyLarge (24sp line height, 0.5sp letter spacing) unless it sets its own */
+  font-weight: 400;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+.mmd-head {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--surface-variant) 60%, transparent);
+}
+.mmd-head > .icon {
+  flex-shrink: 0;
+}
+.mmd-title {
+  margin-left: 6px;
+  min-width: 0;
+  font-size: calc(11.5 * var(--sp));
+  font-weight: 700;
+  letter-spacing: calc(0.5 * var(--sp));
+  color: var(--primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mmd-spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Diagram / Code pills */
+.mmd-tabs {
+  display: flex;
+  flex-shrink: 0;
+  margin-right: 6px;
+  padding: 2px;
+  border-radius: 16px;
+  background: var(--surface-variant);
+}
+.mmd-tab {
+  padding: 3px 8px;
+  border-radius: 14px;
+  font-size: calc(11 * var(--sp));
+  font-weight: 600;
+  color: color-mix(in srgb, var(--on-surface) 70%, transparent);
+  white-space: nowrap;
+  transition: background-color 120ms, color 120ms;
+}
+.mmd-tab.on {
+  background: var(--primary);
+  color: #fff;
+}
+.mmd-head .mmd-expand {
+  margin-left: 2px;
+}
+.mmd-divider {
+  height: 0.5px;
+  background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+
+/* body: heightIn(180.dp, 420.dp) + padding(6.dp); the WebView page adds 10px and centers the diagram */
+.mmd-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 180px;
+  max-height: 420px;
+  padding: 6px;
+}
+.mmd-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  padding: 10px;
+}
+.mmd-svg {
+  width: 100%;
+  margin: auto 0;
+}
+.mmd-svg > svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Labels are measured in .mmd-measure and drawn in .mmd-svg / .mmd-full-svg: same inherited text styles in all */
+.mmd-svg,
+.mmd-full-svg,
+.mmd-measure {
+  font-size: 16px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-transform: none;
+  text-indent: 0;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.mmd-measure {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* a diagram that does not parse: a small error line over the code */
+.mmd-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+  color: var(--danger);
+  font-size: calc(11.5 * var(--sp));
+  line-height: calc(16 * var(--sp));
+  letter-spacing: 0;
+}
+.mmd-error .icon {
+  flex-shrink: 0;
+}
+.mmd-error-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ fullscreen (CodeFullscreen's look) */
+
+.mmd-full {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--on-surface);
+  font-weight: 400;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms var(--fast-out-slow-in);
+}
+.mmd-full.shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mmd-full-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background: var(--surface);
+}
+.mmd-full-title {
+  margin-left: 6px;
+  min-width: 0;
+  /* titleMedium, bold */
+  font-size: calc(16 * var(--sp));
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.15 * var(--sp));
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mmd-full .mmd-tab {
+  padding: 4px 10px;
+  font-size: calc(12 * var(--sp));
+}
+.mmd-gap2 {
+  width: 2px;
+  flex-shrink: 0;
+}
+.mmd-full-divider {
+  height: 0.5px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--outline-variant) 30%, transparent);
+}
+.mmd-full-canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  /* the fit width must not change when a scrollbar comes or goes */
+  scrollbar-gutter: stable;
+  padding: 10px;
+  background: var(--background);
+}
+.mmd-full-svg {
+  margin: auto;
+  flex-shrink: 0;
+}
+.mmd-full-svg > svg {
+  display: block;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+}
+.mmd-full-code {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.mmd-full-code .mmd-error {
+  padding: 0 0 4px;
+}

@@ -1,0 +1,229 @@
+{
+  "name": "antigem-vscode",
+  "displayName": "AntiGem",
+  "description": "One chat UI for Antigravity (agy), Claude Code, Codex and OpenCode — the AntiGem app, inside VS Code.",
+  "publisher": "antigem",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "antigem",
+          "title": "AntiGem",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "antigem": [
+        {
+          "type": "webview",
+          "id": "antigem.chat",
+          "name": "AntiGem"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "antigem.newChat",
+        "title": "New Chat",
+        "category": "AntiGem",
+        "icon": "$(add)"
+      },
+      {
+        "command": "antigem.openInEditor",
+        "title": "Open This Chat in an Editor Tab",
+        "category": "AntiGem",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "antigem.focus",
+        "title": "Focus Chat Input",
+        "category": "AntiGem"
+      },
+      {
+        "command": "antigem.addSelection",
+        "title": "Add Selection to AntiGem Chat",
+        "category": "AntiGem"
+      },
+      {
+        "command": "antigem.addFile",
+        "title": "Add to AntiGem Chat",
+        "category": "AntiGem"
+      },
+      {
+        "command": "antigem.restartBridge",
+        "title": "Restart Bridge",
+        "category": "AntiGem"
+      },
+      {
+        "command": "antigem.showLogs",
+        "title": "Show Logs",
+        "category": "AntiGem"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "antigem.newChat",
+          "when": "view == antigem.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "antigem.openInEditor",
+          "when": "view == antigem.chat",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "antigem.addSelection",
+          "when": "editorHasSelection",
+          "group": "antigem@1"
+        },
+        {
+          "command": "antigem.addFile",
+          "when": "!editorHasSelection && resourceScheme == file",
+          "group": "antigem@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "antigem.addFile",
+          "when": "resourceScheme == file",
+          "group": "antigem@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "antigem.addFile",
+          "when": "resourceScheme == file",
+          "group": "antigem@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "antigem.addFile",
+          "when": "editorIsOpen"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AntiGem",
+      "properties": {
+        "antigem.bridgePort": {
+          "type": "number",
+          "default": 1244,
+          "description": "Port of the AntiGem bridge (127.0.0.1)."
+        },
+        "antigem.hubPort": {
+          "type": "number",
+          "default": 1245,
+          "description": "Port of the Antigravity (agy) hub the bridge starts."
+        },
+        "antigem.defaultAgent": {
+          "type": "string",
+          "enum": [
+            "AGY",
+            "CLAUDE",
+            "CODEX",
+            "OPENCODE"
+          ],
+          "default": "AGY",
+          "description": "Agent picked for a new chat."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "antigem.focus",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g"
+      },
+      {
+        "command": "antigem.addSelection",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "antigem.newChat",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n",
+        "when": "focusedView == antigem.chat || activeWebviewPanelId == antigem.chatPanel"
+      }
+    ]
+  },
+  "scripts": {
+    "build:host": "node esbuild.mjs",
+    "build:webview": "vite build --config webview/vite.config.ts",
+    "build:bridge": "bash scripts/build-bridge.sh",
+    "build:bridge:linux-x64": "cd bridge && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-linux-x64 .",
+    "build:bridge:linux-arm64": "cd bridge && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-linux-arm64 .",
+    "build:bridge:darwin-x64": "cd bridge && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-darwin-x64 .",
+    "build:bridge:darwin-arm64": "cd bridge && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-darwin-arm64 .",
+    "build:bridge:win32-x64": "cd bridge && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-win32-x64.exe .",
+    "build": "npm run build:host && npm run build:webview",
+    "build:all": "npm run build:bridge && npm run build",
+    "watch:host": "node esbuild.mjs --watch",
+    "dev:webview": "vite --config webview/vite.config.ts",
+    "dev:server": "node esbuild.mjs --dev && node dist/dev-server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p webview/tsconfig.json",
+    "vscode:prepublish": "npm run build",
+    "package": "node scripts/package-target.mjs",
+    "package:linux-x64": "node scripts/package-target.mjs linux-x64",
+    "package:linux-arm64": "node scripts/package-target.mjs linux-arm64",
+    "package:darwin-x64": "node scripts/package-target.mjs darwin-x64",
+    "package:darwin-arm64": "node scripts/package-target.mjs darwin-arm64",
+    "package:win32-x64": "node scripts/package-target.mjs win32-x64",
+    "package:all": "node scripts/package-all.mjs",
+    "package:single": "npx --yes @vscode/vsce package --out antigem-vscode-all-platforms.vsix"
+  },
+  "dependencies": {
+    "protobufjs": "^8.8.1",
+    "ws": "^8.22.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/santoshkurmi/antigem_vscode_extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/santoshkurmi/antigem_vscode_extension/issues"
+  },
+  "homepage": "https://github.com/santoshkurmi/antigem_vscode_extension#readme",
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.1",
+    "@material-design-icons/svg": "^0.14.15",
+    "@types/node": "^26.6.6",
+    "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "katex": "^0.16.22",
+    "mermaid": "^12.3.0",
+    "solid-js": "^1.9.18",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7",
+    "vite-plugin-solid": "^2.11.15"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "@vscode/vsce-sign@2.1.0": true,
+    "keytar@7.9.0": true
+  }
+}

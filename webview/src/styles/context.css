@@ -1,0 +1,179 @@
+/*
+ * TokenUsageDetailsSheet.kt, ContextSummaryCheckpointBanner (MessageBubble.kt) and LiveSummarizingCard
+ * (ContextSummaryCard.kt). Compose draws a Surface's border inside its bounds, over the padding: the CSS borders
+ * below take their 1px out of the Kotlin padding so the content sits where it does in the app.
+ * Text keeps bodyLarge's 24sp line height and 0.5sp spacing (see body in base.css) unless the Kotlin sets its own.
+ */
+
+/* ------------------------------------------------------------------ reply details sheet */
+
+.tud-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 6px; /* 22dp with the sheet's own 16px */
+  color: var(--on-background);
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+.tud-title {
+  font-size: calc(17 * var(--sp));
+  font-weight: 700;
+}
+.tud-sub {
+  margin-bottom: 14px;
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.tud-card {
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-variant) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+.tud-model {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 9px 3px 9px 13px;
+}
+.tud-model-icon {
+  width: 34px;
+  height: 34px;
+  margin-right: 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-alt) 14%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tud-model-text {
+  flex: 1;
+  min-width: 0;
+}
+.tud-model-label {
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.tud-model-name {
+  font-family: var(--mono);
+  font-size: calc(14 * var(--sp));
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}
+.tud-model-provider {
+  font-size: calc(11.5 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.tud-rows {
+  padding: 5px 13px;
+}
+.tud-divider {
+  height: 1px;
+  background: color-mix(in srgb, var(--on-surface) 6%, transparent);
+}
+.tud-row {
+  display: flex;
+  align-items: center;
+  padding: 9px 0;
+  font-size: calc(13.5 * var(--sp));
+}
+.tud-row > .icon {
+  margin-right: 10px;
+}
+.tud-row-label {
+  flex: 1;
+  min-width: 0;
+}
+.tud-row-value {
+  font-family: var(--mono);
+  font-weight: 600;
+  white-space: pre-wrap; /* "1,234  (40% of the input)": two spaces */
+}
+
+/* ------------------------------------------------------------------ context compacted banner */
+
+.ctx-banner {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 11px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-variant) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  cursor: pointer;
+  text-align: start;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+.ctx-banner-head {
+  display: flex;
+  align-items: center;
+}
+.ctx-banner-title {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 600;
+  color: var(--primary);
+}
+.ctx-banner-toggle {
+  flex-shrink: 0;
+  font-size: calc(11 * var(--sp));
+  font-weight: 500;
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.ctx-banner-divider {
+  height: 1px;
+  margin: 8px 0;
+  background: color-mix(in srgb, var(--on-surface) 10%, transparent);
+}
+.ctx-banner-text {
+  font-size: calc(12 * var(--sp));
+  line-height: calc(18 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 85%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}
+
+/* ------------------------------------------------------------------ live summarizing card */
+
+.ctx-summarizing {
+  margin: 6px 16px;
+  padding: 11px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-variant) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 50%, transparent);
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+.ctx-summarizing-row {
+  display: flex;
+  align-items: center;
+}
+.ctx-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+.ctx-dot + .ctx-dot {
+  margin-left: 4px;
+}
+.ctx-summarizing-text {
+  min-width: 0;
+  margin-left: 8px;
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 500;
+  color: var(--on-surface);
+  overflow-wrap: anywhere;
+}
+.ctx-summarizing-queued {
+  margin-top: 6px;
+  font-size: calc(11 * var(--sp));
+  color: var(--on-surface-variant);
+  overflow-wrap: anywhere;
+}
