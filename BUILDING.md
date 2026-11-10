@@ -67,7 +67,7 @@ If you prefer one package containing every platform's binary, build all binaries
 npm run package:single
 ```
 
-This produces `antigem-vscode-all-platforms.vsix` (~70–75 MB) containing all five binaries.
+This produces `antigem.vsix` (~30 MB) containing all five binaries.
 It is under the Marketplace's ~100 MB limit, but per-platform packages are still recommended for
 smaller downloads and faster installs.
 

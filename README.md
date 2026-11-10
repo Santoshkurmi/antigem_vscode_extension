@@ -82,7 +82,7 @@ A single VSIX containing all five 64-bit binaries is the recommended (and defaul
 builds the bridge (all targets), the host and the webview, then packages:
 
 ```sh
-npm run package          # → antigem-vscode-all-platforms.vsix (~31 MB)
+npm run package          # → antigem.vsix (~31 MB)
 ```
 
 The runtime picks the right binary by `process.platform`/`process.arch` (with `.exe` on Windows), so one package

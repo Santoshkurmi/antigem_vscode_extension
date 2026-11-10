@@ -2,7 +2,7 @@
   "name": "antigem-vscode",
   "displayName": "AntiGem",
   "description": "One chat UI for Antigravity (agy), Claude Code, Codex and OpenCode — the AntiGem app (VS Code port of the AntiGem Android app: https://github.com/santoshkurmi/antigem), inside VS Code.",
-  "publisher": "antigem",
+  "publisher": "santoshkurmi",
   "version": "0.1.0",
   "license": "GPL-3.0",
   "private": true,
@@ -16,6 +16,7 @@
   "extensionKind": [
     "workspace"
   ],
+  "icon": "media/icon.png",
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished"
@@ -186,7 +187,7 @@
     "dev:webview": "vite --config webview/vite.config.ts",
     "dev:server": "node esbuild.mjs --dev && node dist/dev-server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p webview/tsconfig.json",
-    "package": "npm run build:all && npx --yes @vscode/vsce package --out antigem-vscode-all-platforms.vsix",
+    "package": "npm run build:all && npx --yes @vscode/vsce package --out antigem.vsix",
     "package:single": "npm run package",
     "package:linux-x64": "npm run build:all && node scripts/package-target.mjs linux-x64",
     "package:linux-arm64": "npm run build:all && node scripts/package-target.mjs linux-arm64",
