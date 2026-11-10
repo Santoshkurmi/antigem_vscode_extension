@@ -261,12 +261,17 @@ export function InputBar() {
       showToast('The agent is not ready yet. Start it to send messages.', 'warning');
       return;
     }
-    sendMessage(t, atts);
+    // clear the box (and this chat's draft) BEFORE sending: the first message of a new chat gives it its id, and that
+    // key change saves the box as the "new chat" draft — with the text still in it, every next new chat showed it again
+    const key = draftKey();
     batch(() => {
       setText('');
       setAttachments([]);
       setPopup(null);
     });
+    drafts.delete(key);
+    sendMessage(t, atts);
+    drafts.delete(key);
     drafts.delete(draftKey());
     queueMicrotask(autosize);
   };
