@@ -59,6 +59,18 @@ npm run package:win32-x64
 npm run package:all
 ```
 
+### Single VSIX for all platforms (optional)
+
+If you prefer one package containing every platform's binary, build all binaries and run:
+
+```sh
+npm run package:single
+```
+
+This produces `antigem-vscode-all-platforms.vsix` (~70–75 MB) containing all five binaries.
+It is under the Marketplace's ~100 MB limit, but per-platform packages are still recommended for
+smaller downloads and faster installs.
+
 Packaging temporarily moves the other platform binaries out of `bin/` and restores them afterwards, so `bin/` always ends up with all binaries again.
 
 ## Development

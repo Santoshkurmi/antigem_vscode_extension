@@ -28,6 +28,7 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'es2022',
     cssCodeSplit: false,
+    chunkSizeWarningLimit: 2000,
     // small assets inline; fonts stay files (index.css stays small, a font loads only when used)
     assetsInlineLimit: (file: string, content: Buffer) => !/\.(woff2?|ttf|otf|eot)$/i.test(file) && content.length < 100_000,
     rollupOptions: {

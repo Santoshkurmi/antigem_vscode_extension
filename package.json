@@ -4,7 +4,7 @@
   "description": "One chat UI for Antigravity (agy), Claude Code, Codex and OpenCode — the AntiGem app, inside VS Code.",
   "publisher": "antigem",
   "version": "0.1.0",
-  "license": "UNLICENSED",
+  "license": "GPL-3.0",
   "private": true,
   "engines": {
     "vscode": "^1.90.0"
@@ -180,20 +180,20 @@
     "build:bridge:darwin-arm64": "cd bridge && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-darwin-arm64 .",
     "build:bridge:win32-x64": "cd bridge && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o ../bin/antigem-bridge-win32-x64.exe .",
     "build": "npm run build:host && npm run build:webview",
+    "build:single": "npm run build:all",
     "build:all": "npm run build:bridge && npm run build",
     "watch:host": "node esbuild.mjs --watch",
     "dev:webview": "vite --config webview/vite.config.ts",
     "dev:server": "node esbuild.mjs --dev && node dist/dev-server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p webview/tsconfig.json",
-    "vscode:prepublish": "npm run build",
-    "package": "node scripts/package-target.mjs",
-    "package:linux-x64": "node scripts/package-target.mjs linux-x64",
-    "package:linux-arm64": "node scripts/package-target.mjs linux-arm64",
-    "package:darwin-x64": "node scripts/package-target.mjs darwin-x64",
-    "package:darwin-arm64": "node scripts/package-target.mjs darwin-arm64",
-    "package:win32-x64": "node scripts/package-target.mjs win32-x64",
-    "package:all": "node scripts/package-all.mjs",
-    "package:single": "npx --yes @vscode/vsce package --out antigem-vscode-all-platforms.vsix"
+    "package": "npm run build:all && npx --yes @vscode/vsce package --out antigem-vscode-all-platforms.vsix",
+    "package:single": "npm run package",
+    "package:linux-x64": "npm run build:all && node scripts/package-target.mjs linux-x64",
+    "package:linux-arm64": "npm run build:all && node scripts/package-target.mjs linux-arm64",
+    "package:darwin-x64": "npm run build:all && node scripts/package-target.mjs darwin-x64",
+    "package:darwin-arm64": "npm run build:all && node scripts/package-target.mjs darwin-arm64",
+    "package:win32-x64": "npm run build:all && node scripts/package-target.mjs win32-x64",
+    "package:all": "npm run build:all && node scripts/package-all.mjs"
   },
   "dependencies": {
     "protobufjs": "^8.8.1",

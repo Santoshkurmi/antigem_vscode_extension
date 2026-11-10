@@ -62,10 +62,20 @@ The bridge runs detached and is shared by all windows; stop it with the "AntiGem
 
 ## Packaging for the Marketplace
 
-A separate VSIX is published per platform so each install stays small (one bridge binary each):
+A single VSIX containing all five 64-bit binaries is the recommended (and default) way to ship. One command
+builds the bridge (all targets), the host and the webview, then packages:
 
 ```sh
-npm run package:linux-x64        # single target
+npm run package          # → antigem-vscode-all-platforms.vsix (~31 MB)
+```
+
+The runtime picks the right binary by `process.platform`/`process.arch` (with `.exe` on Windows), so one package
+works on every supported 64-bit platform.
+
+Per-platform packages are still available if you ever want smaller downloads:
+
+```sh
+npm run package:linux-x64        # single target (~8.5 MB)
 npm run package:all              # all 64-bit targets
 ```
 
