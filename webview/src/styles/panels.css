@@ -1371,3 +1371,16 @@
   line-height: calc(17 * var(--sp));
   color: color-mix(in srgb, var(--on-surface) 60%, transparent);
 }
+.proj-icon.current {
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+}
+.art-thumb {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--surface-container-lowest);
+  cursor: zoom-in;
+}

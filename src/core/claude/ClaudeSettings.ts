@@ -1,11 +1,35 @@
 // Claude Code's settings pages (ports of the app's ClaudeSettingsScreen.kt pages, ClaudeConfigManager.kt and the
-// account part of ClaudeAccountManager.kt): account + plan usage, chat defaults, permission rules, MCP servers,
-// plugins, memory, custom providers, the CLI, and settings.json itself. Everything goes through the bridge.
+// account part of ClaudeAccountManager.kt): Account & CLI (install / update, sign-in, plan usage), chat defaults,
+// permission rules, MCP servers, plugins, memory, custom providers, and settings.json itself. Everything goes through
+// the bridge, with timeouts: a page Claude Code can't serve (not installed, bridge down) says so at once.
 // Every settings.json write re-reads the file first and changes only its own keys.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { ModelGroupView, QuotaWindowView, SettingFormField, SettingItem, SettingListRow, SettingsPage, SettingsSection } from '../../../shared/protocol';
+import type { ModelGroupView, QuotaWindowView, SettingFormField, SettingItem, SettingsPage, SettingsSection } from '../../../shared/protocol';
 import type { AgentSettingsProvider } from '../types';
 import { countdownText } from '../agy/quota';
+import {
+  Cached,
+  MCP_EDIT,
+  MCP_LIST,
+  MCP_PRESETS,
+  MCP_RECONNECT,
+  MCP_REFRESH_ALL,
+  MCP_REMOVE,
+  blockedReason,
+  joinCommand,
+  mcpForm,
+  mcpFormValues,
+  mcpPage,
+  remainingText,
+  presetHeaders,
+  presetTap,
+  presetsItem,
+  unavailablePage,
+  waitFor,
+  withTimeout,
+  type McpServerView,
+  type McpState,
+} from '../agy/settingsKit';
 import type { ClaudeBackend } from './ClaudeBackend';
 import { scopedLimits } from './quota';
 import { ClaudeProviders } from './ClaudeProviders';
@@ -13,6 +37,22 @@ import { PERMISSION_MODES, effortLabel, num, permissionModeDescription, planLabe
 
 const AGENT = 'CLAUDE' as const;
 const SLOW = 90_000;
+/** A settings page waits this long for Claude Code's status while it is checked, then says why it can't load. */
+const WAIT_MS = 3_000;
+/** A slow list (MCP status, plugins) is waited for this long; then the page shows what it has and updates later. */
+const PAGE_WAIT_MS = 8_000;
+/** A quick bridge read (settings.json, memory, the CLI job). */
+const READ_MS = 6_000;
+
+const TITLES: Record<string, string> = {
+  'claude.defaults': 'Chat defaults',
+  'claude.providers': 'Custom providers',
+  'claude.permissions': 'Permission rules',
+  'claude.mcp': 'MCP servers',
+  'claude.plugins': 'Plugins',
+  'claude.memory': 'Memory',
+  'claude.advanced': 'Advanced',
+};
 
 const PAGES: { id: string; label: string; description: string; icon: string }[] = [
   { id: 'claude.defaults', label: 'Chat defaults', description: 'Model, effort, thinking, permission mode, output style', icon: 'tune' },
@@ -40,21 +80,6 @@ const PLUGIN_DONE: Record<string, string> = {
   'marketplace-update': 'Updated marketplace',
 };
 
-const lines = (s?: string) =>
-  (s ?? '')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-function pairs(text: string | undefined, sep: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const l of lines(text)) {
-    const i = l.indexOf(sep);
-    if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + 1).trim();
-  }
-  return out;
-}
-
 const lastLine = (s: unknown) =>
   String(s ?? '')
     .split('\n')
@@ -72,8 +97,8 @@ interface Login {
 }
 
 export class ClaudeSettings implements AgentSettingsProvider {
-  private mcp: { servers: any[]; error: string | null } | null = null;
-  private plugins: any | null = null;
+  private mcpList: Cached<any[]>;
+  private pluginList: Cached<any>;
   private memory: Record<'user' | 'project', any> = { user: null, project: null };
   private autoMemory: any | null = null;
   private sandbox: any | null = null;
@@ -90,6 +115,8 @@ export class ClaudeSettings implements AgentSettingsProvider {
 
   constructor(private b: ClaudeBackend) {
     this.providers = new ClaudeProviders(b, () => this.changed());
+    this.mcpList = new Cached(() => this.fetchMcp(), () => this.changed());
+    this.pluginList = new Cached(() => this.fetchPlugins(), () => this.changed());
   }
 
   private changed() {
@@ -100,89 +127,83 @@ export class ClaudeSettings implements AgentSettingsProvider {
     return e instanceof Error ? e.message : String(e);
   }
 
+  private statusTriedAt = 0;
+
+  /** Reads Claude Code's status when it is not known yet — not again and again while that fails (each read
+   *  rebuilds the open pages). */
+  private ensureStatus(): Promise<void> | null {
+    if (this.b.cli || Date.now() - this.statusTriedAt < 10_000) return null;
+    this.statusTriedAt = Date.now();
+    return this.b.loadStatus();
+  }
+
+  /** A quick bridge read (settings.json, memory, the CLI job): fails after a few seconds instead of hanging. */
+  private read<T = any>(p: string): Promise<T> {
+    return this.b.bridgeJson<T>(p, {}, READ_MS);
+  }
+
   // ------------------------------------------------------------------ root
+
+  /** "you@mail.com · Max" / "Not signed in" / why Claude Code can't be used. */
+  private accountSummary(): string {
+    const st = this.b.status();
+    const a = this.b.cli?.auth;
+    if (this.login) return 'Signing in…';
+    if (st.state === 'starting') return 'Checking…';
+    if (st.state === 'not_installed') return 'Claude Code is not installed';
+    if (a?.loggedIn) return [a.email, a.subscriptionType ? planLabel(a.subscriptionType) : null].filter(Boolean).join(' · ') || 'Signed in';
+    if (this.b.cli?.installed) return 'Not signed in';
+    return st.detail ?? 'Not available';
+  }
 
   /** The "Claude Code" row on the agents page (opens the claude page). */
   rootItem(): SettingItem {
-    const st = this.b.status();
-    const a = this.b.cli?.auth;
-    const state =
-      st.state === 'online'
-        ? a?.loggedIn
-          ? [a.email, a.subscriptionType ? planLabel(a.subscriptionType) : null].filter(Boolean).join(' · ') || 'Signed in'
-          : (st.detail ?? 'Online')
-        : st.state === 'starting'
-          ? 'Checking…'
-          : (st.detail ?? st.state);
-    return { kind: 'page', id: 'claude', label: 'Claude Code', icon: 'smart_toy', description: state, badge: this.b.cli?.version ? this.b.cli.version.replace(/\s*\(Claude Code\)\s*/, '') : null };
+    const v = this.b.status().version;
+    return { kind: 'page', id: 'claude', label: 'Claude Code', icon: 'smart_toy', description: this.accountSummary(), badge: v ?? null };
   }
 
   private section(id: string, items: SettingItem[], title = '', description: string | null = null): SettingsSection {
     return { id, title, agent: AGENT, description, items };
   }
 
+  /** Claude Code's own page: links only, as the app's ClaudeSettingsGroup (Account & CLI / settings / Advanced). */
   private mainPage(): SettingsPage {
     const st = this.b.status();
-    const cli = this.b.cli;
-    const a = cli?.auth;
-    const account: SettingItem[] = [
-      {
-        kind: 'info',
-        id: 'claude.status',
-        label: 'Claude Code CLI',
-        value: !cli ? (st.state === 'starting' ? 'Checking…' : (st.detail ?? st.state)) : cli.installed ? (cli.version ?? 'Installed') : 'Not installed',
-        tone: !cli ? (st.state === 'starting' ? 'muted' : 'error') : cli.installed ? 'ok' : 'error',
-        description: cli?.bin_path ?? null,
-      },
-      {
-        kind: 'info',
-        id: 'claude.account',
-        label: 'Account',
-        value: !cli ? '…' : a?.loggedIn ? a.email || 'Signed in' : cli.auth_error ? 'Unknown' : 'Not signed in',
-        tone: a?.loggedIn ? 'ok' : cli ? 'warn' : 'muted',
-        description: a?.loggedIn ? [a.subscriptionType ? `Plan: ${planLabel(a.subscriptionType)}` : null, a.authMethod ? `via ${a.authMethod}` : null].filter(Boolean).join(' · ') || null : (cli?.auth_error ?? null),
-      },
-    ];
-    // no sign-in / sign-out button until the account state is known
-    if (this.login) {
-      account.push({ kind: 'info', id: 'claude.login', label: 'Signing in…', value: this.login.state, tone: 'warn', description: 'Finish in the browser. If it shows a code, paste it here.' });
-      account.push({ kind: 'button', id: 'claude.signin.open', label: 'Open the sign-in page again', disabled: !this.login.automatic_url });
-      account.push({ kind: 'button', id: 'claude.signin.manual', label: 'Browser can’t return here? Open the code page', disabled: !this.login.manual_url });
-      account.push({ kind: 'button', id: 'claude.signin.code', label: 'Enter the code', form: [{ id: 'code', label: 'Code from the code page', kind: 'text', placeholder: 'code#state', required: true }] });
-      account.push({ kind: 'button', id: 'claude.signin.cancel', label: 'Cancel sign-in' });
-    } else if (a?.loggedIn) account.push({ kind: 'button', id: 'claude.signout', label: 'Sign out', style: 'danger', confirm: 'Sign out of Claude Code?' });
-    else if (cli?.installed)
-      account.push({
-        kind: 'button',
-        id: 'claude.signin',
-        label: 'Sign in',
-        style: 'primary',
-        form: [
+    const a = this.b.cli?.auth;
+    const accountBadge = this.login
+      ? 'Signing in…'
+      : st.state === 'not_installed'
+        ? 'Not installed'
+        : a?.loggedIn
+          ? a.subscriptionType
+            ? planLabel(a.subscriptionType)
+            : 'Signed in'
+          : this.b.cli?.installed
+            ? 'Signed out'
+            : st.state === 'starting'
+              ? 'Checking…'
+              : null;
+    return {
+      id: 'claude',
+      title: 'Claude Code',
+      sections: [
+        this.section('cli', [
           {
-            id: 'method',
-            label: 'Account',
-            kind: 'select',
-            value: 'claudeai',
-            options: [
-              { value: 'claudeai', label: 'Claude subscription', description: 'Pro, Max, Team or Enterprise' },
-              { value: 'console', label: 'Anthropic Console', description: 'API billing' },
-            ],
+            kind: 'page',
+            id: 'claude.cli',
+            label: 'Account & CLI',
+            icon: 'account',
+            description: [this.accountSummary(), st.version ? `CLI ${st.version}` : null].filter(Boolean).join(' · '),
+            badge: accountBadge,
           },
-        ],
-      });
-    account.push({ kind: 'button', id: 'claude.refresh', label: 'Check again' });
-    const sections = [this.section('account', account)];
-    if (a?.loggedIn || this.b.usage) sections.push(this.section('usage', this.usageItems()));
-    sections.push(
-      this.section('pages', [
-        ...PAGES.map((p) => ({ kind: 'page' as const, id: p.id, label: p.label, description: p.description, icon: p.icon, badge: this.badge(p.id) })),
-      ]),
-      this.section('more', [
-        { kind: 'page', id: 'claude.cli', label: 'Claude Code CLI', description: 'Install and update Claude Code', icon: 'terminal', badge: cli?.version ? cli.version.replace(/\s*\(Claude Code\)\s*/, '') : null },
-        { kind: 'page', id: 'claude.advanced', label: 'Advanced', description: 'Edit ~/.claude/settings.json directly', icon: 'code' },
-      ]),
-    );
-    return { id: 'claude', title: 'Claude Code', sections };
+        ]),
+        this.section(
+          'pages',
+          PAGES.map((p) => ({ kind: 'page' as const, id: p.id, label: p.label, description: p.description, icon: p.icon, badge: this.badge(p.id) })),
+        ),
+        this.section('more', [{ kind: 'page', id: 'claude.advanced', label: 'Advanced', description: 'Edit ~/.claude/settings.json directly', icon: 'code' }]),
+      ],
+    };
   }
 
   private badge(page: string): string | null {
@@ -195,13 +216,13 @@ export class ClaudeSettings implements AgentSettingsProvider {
         return n ? `${n} allowed` : null;
       }
       case 'claude.mcp':
-        return this.mcp?.servers.length ? `${this.mcp.servers.length} servers` : null;
+        return this.mcpList.value?.length ? `${this.mcpList.value.length} servers` : null;
       default:
         return null;
     }
   }
 
-  /** Plan usage (the app's Account page card): 5-hour, weekly, and a model's own weekly share. */
+  /** Plan usage (the app's Account page card): what is left of the 5-hour, weekly, and a model's own weekly limit. */
   private usageItems(): SettingItem[] {
     const u = this.b.usage;
     const rl = u?.rate_limits;
@@ -210,7 +231,8 @@ export class ClaudeSettings implements AgentSettingsProvider {
     if (u && rl && u.rate_limits_available !== false) {
       const win = (label: string, used: number, iso: unknown): QuotaWindowView => {
         const t = typeof iso === 'string' ? Date.parse(iso) : NaN;
-        return { label, remaining: Math.max(0, Math.min(1, 1 - used)), resetText: countdownText(Number.isFinite(t) ? t : null) };
+        const remaining = Math.max(0, Math.min(1, 1 - used));
+        return { label, remaining, resetText: countdownText(Number.isFinite(t) ? t : null), text: remainingText(remaining, false) };
       };
       const windows: QuotaWindowView[] = [];
       if (rl.five_hour) windows.push(win('5h', num(rl.five_hour.utilization) / 100, rl.five_hour.resets_at));
@@ -228,32 +250,53 @@ export class ClaudeSettings implements AgentSettingsProvider {
 
   // ------------------------------------------------------------------ pages
 
+  /** Why Claude Code's pages can't be read now (null = they can): not installed, bridge down… Signed out is fine:
+   *  settings.json, memory, MCP servers and plugins work without an account. Waits a little while it is checked. */
+  private async blocked(): Promise<string | null> {
+    if (this.b.status().state === 'starting') {
+      void this.ensureStatus();
+      await waitFor(() => this.b.status().state !== 'starting', WAIT_MS);
+    }
+    const st = this.b.status();
+    if (st.state === 'online' || (st.state === 'error' && this.b.cli?.installed)) return null;
+    return blockedReason(st);
+  }
+
   async page(id: string): Promise<SettingsPage | null> {
+    if (id === 'claude') {
+      void this.ensureStatus();
+      return this.mainPage();
+    }
+    if (id === 'claude.cli') {
+      // works with Claude Code missing too: it is where it is installed
+      const status = this.ensureStatus();
+      await Promise.allSettled([this.loadCliJob(), status ? withTimeout(status, WAIT_MS, 'Claude Code') : null]);
+      return this.cliPage();
+    }
+    if (!(id in TITLES)) return null;
+    const why = await this.blocked();
+    if (why) return unavailablePage(id, TITLES[id], AGENT, why, { page: 'claude.cli', label: 'Account & CLI', description: 'Install Claude Code, or see why it can’t be used' });
     switch (id) {
-      case 'claude':
-        if (!this.b.cli) void this.b.loadStatus();
-        return this.mainPage();
       case 'claude.defaults':
-        await Promise.all([this.b.loadChatDefaults(), this.b.cliInfo() ? Promise.resolve() : this.b.loadInfo(false)]);
+        await Promise.all([this.b.loadChatDefaults(), this.b.cliInfo() ? Promise.resolve() : withTimeout(this.b.loadInfo(false), PAGE_WAIT_MS, 'Claude Code').catch(() => undefined)]);
         return this.defaultsPage();
       case 'claude.permissions':
         await Promise.all([this.b.loadChatDefaults(), this.loadSandbox()]);
         return this.permissionsPage();
-      case 'claude.mcp':
-        await this.loadMcp();
-        return this.mcpPage();
-      case 'claude.plugins':
-        await this.loadPlugins();
-        return this.pluginsPage();
+      case 'claude.mcp': {
+        const done = await this.mcpList.ensure(PAGE_WAIT_MS);
+        return this.mcpPage(!done);
+      }
+      case 'claude.plugins': {
+        const done = await this.pluginList.ensure(PAGE_WAIT_MS);
+        return { ...this.pluginsPage(), loading: !done || undefined };
+      }
       case 'claude.memory':
         await this.loadMemory();
         return this.memoryPage();
       case 'claude.providers':
         await this.b.loadProviders();
         return this.providers.page();
-      case 'claude.cli':
-        await this.loadCliJob();
-        return this.cliPage();
       case 'claude.advanced':
         await this.b.loadChatDefaults();
         return this.advancedPage();
@@ -319,7 +362,7 @@ export class ClaudeSettings implements AgentSettingsProvider {
 
   private async loadSandbox() {
     try {
-      this.sandbox = await this.b.bridgeJson('/api/claude/sandbox', {}, SLOW);
+      this.sandbox = await this.b.bridgeJson('/api/claude/sandbox', {}, PAGE_WAIT_MS);
     } catch (e) {
       this.sandbox = { available: false, enabled: false, reason: `Could not check: ${this.err(e)}` };
     }
@@ -396,113 +439,199 @@ export class ClaudeSettings implements AgentSettingsProvider {
 
   // --- MCP servers (`claude mcp` through the bridge)
 
-  private async loadMcp() {
-    try {
-      const cwd = this.b.workspaceDir();
-      const r = await this.b.bridgeJson(`/api/claude/mcp${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`, {}, SLOW);
-      this.mcp = r?.success ? { servers: Array.isArray(r.servers) ? r.servers : [], error: null } : { servers: this.mcp?.servers ?? [], error: r?.error ?? 'MCP status failed' };
-    } catch (e) {
-      this.mcp = { servers: this.mcp?.servers ?? [], error: this.err(e) };
-    }
+  private async fetchMcp(): Promise<any[]> {
+    const cwd = this.b.workspaceDir();
+    const r = await this.b.bridgeJson(`/api/claude/mcp${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`, {}, SLOW);
+    if (!r?.success) throw new Error(r?.error ?? 'MCP status failed');
+    return Array.isArray(r.servers) ? r.servers : [];
   }
 
-  private mcpForm(init: { name?: string; transport?: string; url?: string; headers?: string } = {}): SettingFormField[] {
-    return [
-      { id: 'name', label: 'Name', kind: 'text', value: init.name ?? '', placeholder: 'github', required: true },
-      {
-        id: 'transport',
-        label: 'Transport',
-        kind: 'select',
-        value: init.transport ?? 'stdio',
-        options: [
-          { value: 'stdio', label: 'Command (stdio)' },
-          { value: 'http', label: 'HTTP' },
-          { value: 'sse', label: 'SSE' },
-        ],
-      },
-      {
-        id: 'scope',
-        label: 'Available in',
-        kind: 'select',
-        value: 'user',
-        options: [
-          { value: 'user', label: 'All projects' },
-          { value: 'local', label: 'This project (me)' },
-          { value: 'project', label: 'This project (.mcp.json)' },
-        ],
-      },
-      { id: 'command', label: 'Command and arguments', kind: 'text', placeholder: 'npx -y @modelcontextprotocol/server-filesystem /home' },
-      { id: 'env', label: 'Environment (KEY=value per line)', kind: 'multiline' },
-      { id: 'url', label: 'URL', kind: 'text', value: init.url ?? '', placeholder: 'https://example.com/mcp' },
-      { id: 'headers', label: 'Headers (Name: value per line)', kind: 'multiline', value: init.headers ?? '' },
-    ];
+  /** The add / edit form: the common one, with where the server is available (Claude's scopes). */
+  private mcpFormFor(srv?: any): SettingFormField[] {
+    const cfg = srv?.config ?? {};
+    const transport = str(cfg.type) || (cfg.url ? 'http' : 'stdio');
+    return mcpForm({
+      name: srv?.name ?? '',
+      nameLocked: !!srv,
+      type: srv ? transport : 'stdio',
+      remoteTypes: [
+        { value: 'http', label: 'Remote URL (HTTP)', description: 'A URL and optional headers' },
+        { value: 'sse', label: 'Remote URL (SSE)', description: 'An older server-sent events URL' },
+      ],
+      command: cfg.command ? joinCommand([str(cfg.command), ...(Array.isArray(cfg.args) ? cfg.args.map(String) : [])]) : '',
+      env: cfg.env,
+      url: str(cfg.url),
+      headers: cfg.headers,
+      extra: [
+        {
+          id: 'scope',
+          label: 'Available in',
+          kind: 'select',
+          value: ['user', 'local', 'project'].includes(srv?.scope) ? srv.scope : 'user',
+          options: [
+            { value: 'user', label: 'All projects' },
+            { value: 'local', label: 'This project (me)' },
+            { value: 'project', label: 'This project (.mcp.json)' },
+          ],
+        },
+      ],
+    });
   }
 
-  private mcpPage(): SettingsPage {
-    const m = this.mcp ?? { servers: [], error: null };
+  private mcpViews(): McpServerView[] {
     const scopeLabel = (s: string) => (s === 'user' ? 'all projects' : s === 'local' ? 'this project (you)' : s === 'project' ? 'this project (.mcp.json)' : s);
-    const rows: SettingListRow[] = m.servers.map((srv: any) => {
+    const views: McpServerView[] = (this.mcpList.value ?? []).map((srv: any) => {
       const cfg = srv.config ?? {};
       const transport = str(cfg.type) || (cfg.url ? 'http' : 'stdio');
       const target = str(cfg.url) || [str(cfg.command), ...(Array.isArray(cfg.args) ? cfg.args.map(String) : [])].filter(Boolean).join(' ');
-      const busy = this.busy.get(`mcp:${srv.name}`);
-      const status = busy ?? (srv.status === 'connected' ? `${(srv.tools ?? []).length} tools` : srv.status === 'pending' ? 'Starting' : srv.status === 'failed' ? 'Failed' : srv.status === 'needs-auth' ? 'Needs sign-in' : srv.status === 'disabled' ? 'Disabled' : srv.status || 'Unknown');
+      const own = ['user', 'project', 'local'].includes(srv.scope);
+      const state: McpState =
+        srv.status === 'connected'
+          ? 'connected'
+          : srv.status === 'failed'
+            ? 'error'
+            : srv.status === 'pending'
+              ? 'connecting'
+              : srv.status === 'needs-auth'
+                ? 'auth'
+                : srv.status === 'disabled'
+                  ? 'off'
+                  : 'idle';
       return {
-        id: srv.name,
-        title: srv.name,
-        subtitle:
-          [
-            [transport === 'stdio' ? `> ${target}` : `${transport.toUpperCase()} ${target}`, srv.scope || srv.source ? scopeLabel(srv.scope || srv.source) : null].filter(Boolean).join(' · '),
-            srv.error || null,
-            (srv.tools ?? []).length ? `Tools: ${(srv.tools ?? []).map((t: any) => str(t.name)).filter(Boolean).join(', ')}` : null,
-          ]
-            .filter(Boolean)
-            .join('\n') || null,
-        status,
-        statusTone: busy ? 'warn' : srv.status === 'connected' ? 'ok' : srv.status === 'failed' ? 'error' : srv.status === 'disabled' ? 'muted' : 'warn',
-        actions: ['user', 'project', 'local'].includes(srv.scope) ? [{ id: 'remove', label: 'Remove', danger: true, confirm: `Remove ${srv.name}? Claude will no longer be able to use its tools.` }] : [],
+        name: srv.name,
+        state,
+        where: transport === 'stdio' ? target || null : `${transport.toUpperCase()} ${target}`,
+        origin: srv.scope || srv.source ? scopeLabel(srv.scope || srv.source) : null,
+        error: srv.error || null,
+        tools: Array.isArray(srv.tools) ? srv.tools.length : null,
+        toolNames: (srv.tools ?? []).map((t: any) => str(t.name)).filter(Boolean),
+        // Claude Code switches servers per chat (/mcp): there is no saved on/off to set from here
+        enabled: null,
+        reconnect: true,
+        editForm: own ? this.mcpFormFor(srv) : null,
+        removable: own,
+        busy: this.busy.get(`mcp:${srv.name}`) ?? null,
       };
     });
-    for (const [k, v] of this.busy) if (k.startsWith('mcp:') && !rows.some((r) => r.id === k.slice(4))) rows.unshift({ id: k.slice(4), title: k.slice(4), status: v, statusTone: 'warn' });
-    const tools = m.servers.reduce((n: number, s: any) => n + (s.tools?.length ?? 0), 0);
-    const items: SettingItem[] = [
-      {
-        kind: 'list',
-        id: 'servers',
-        label: `Configured servers (${m.servers.length})`,
-        description: tools ? `${tools} tools` : null,
-        rows,
-        emptyText: 'No MCP servers yet. Add one to give Claude more tools.',
-        addLabel: 'Add server',
-        addForm: this.mcpForm(),
-      },
-      { kind: 'button', id: 'reload', label: 'Check again' },
-    ];
-    // the generic quick preset of the app's MCP page (the others are the phone's own servers)
-    const stitch = m.servers.some((x: any) => x.name === 'stitch');
-    items.push({
-      kind: 'button',
-      id: 'preset.stitch',
-      label: stitch ? 'Stitch · added' : 'Add Stitch (Google Stitch UI design · API key)',
-      disabled: stitch,
-      form: this.mcpForm({ name: 'stitch', transport: 'http', url: 'https://stitch.googleapis.com/mcp', headers: 'X-Goog-Api-Key: ' }),
-    });
-    if (m.error) items.unshift({ kind: 'info', id: 'error', label: 'MCP status failed', value: m.error, tone: 'error' });
-    return {
+    for (const [k, v] of this.busy) if (k.startsWith('mcp:') && !views.some((r) => r.name === k.slice(4))) views.unshift({ name: k.slice(4), state: 'connecting', busy: v });
+    return views;
+  }
+
+  private mcpPage(loading = false): SettingsPage {
+    const names = (this.mcpList.value ?? []).map((x: any) => ({ name: String(x.name), url: x.url ?? x.config?.url ?? null }));
+    return mcpPage({
       id: 'claude.mcp',
-      title: 'MCP servers',
-      sections: [this.section('servers', items, '', `Tools Claude can call. Includes servers of the project ${this.b.workspaceDir()}.`)],
+      agent: AGENT,
+      description: `Tools Claude can call. Includes the servers of the project ${this.b.workspaceDir()}.`,
+      servers: this.mcpViews(),
+      error: this.mcpList.error,
+      addForm: this.mcpFormFor(),
+      loading,
+      presets: [presetsItem(names, this.mcpFormFor())],
+    });
+  }
+
+  /** The bridge's add body from the form's values (or a server's saved config). */
+  private mcpBody(name: string, scope: string, f: { remote: boolean; type: string; command: string[]; env: Record<string, string>; url: string; headers: Record<string, string> }) {
+    return {
+      name,
+      scope: scope || 'user',
+      transport: f.remote ? f.type : 'stdio',
+      command: f.remote ? '' : f.command[0],
+      args: f.remote ? [] : f.command.slice(1),
+      env: f.remote ? {} : f.env,
+      url: f.remote ? f.url : '',
+      headers: f.remote ? f.headers : {},
+      cwd: this.b.workspaceDir(),
     };
+  }
+
+  private async postMcp(body: ReturnType<ClaudeSettings['mcpBody']>) {
+    const r = await this.b.bridgeSend('POST', '/api/claude/mcp', body, SLOW);
+    if (!r?.success) throw new Error(`Could not add '${body.name}': ${lastLine(r?.error) ?? 'Add failed'}`);
+  }
+
+  private async deleteMcp(name: string, scope?: string) {
+    const cwd = this.b.workspaceDir();
+    const q = `name=${encodeURIComponent(name)}${scope ? `&scope=${encodeURIComponent(scope)}` : ''}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`;
+    const r = await this.b.bridgeSend('DELETE', `/api/claude/mcp?${q}`, undefined, SLOW);
+    if (!r?.success) throw new Error(r?.error ?? 'Remove failed');
+  }
+
+  /** Runs an MCP change with the row marked busy, then reads the list again. */
+  private async mcpChange<T>(name: string, label: string, run: () => Promise<T>): Promise<T> {
+    this.busy.set(`mcp:${name}`, label);
+    this.changed();
+    try {
+      return await run();
+    } finally {
+      this.busy.delete(`mcp:${name}`);
+      await this.mcpList.reload(PAGE_WAIT_MS);
+      this.changed();
+    }
+  }
+
+  private async mcpAction(id: string, rowId?: string, actionId?: string, values?: Record<string, string>): Promise<string | void> {
+    if (id === MCP_REFRESH_ALL || (id === MCP_LIST && actionId === MCP_RECONNECT)) {
+      // Claude Code connects every server for each check: reading the status again reconnects them
+      const done = await this.mcpList.reload(PAGE_WAIT_MS);
+      this.changed();
+      if (this.mcpList.error) throw new Error(`MCP status failed: ${this.mcpList.error}`);
+      if (!done) return 'Still checking the servers…';
+      if (rowId) {
+        const s = (this.mcpList.value ?? []).find((x: any) => x.name === rowId);
+        if (s?.status === 'failed') throw new Error(`${rowId}: ${s.error ?? 'failed to connect'}`);
+        return s?.status === 'connected' ? `${rowId} connected · ${(s.tools ?? []).length} tools` : `${rowId}: ${s?.status ?? 'not found'}`;
+      }
+      return `${(this.mcpList.value ?? []).length} servers checked`;
+    }
+    if (id === MCP_PRESETS && actionId) return this.addPreset(actionId, values);
+    if (id === MCP_LIST && actionId === 'add' && values) return this.addMcp(values);
+    if (id !== MCP_LIST || !rowId) return;
+    const srv = (this.mcpList.value ?? []).find((s: any) => s.name === rowId);
+    if (actionId === MCP_REMOVE) {
+      await this.mcpChange(rowId, 'Removing…', () => this.deleteMcp(rowId, srv?.scope));
+      return `Removed '${rowId}'`;
+    }
+    if (actionId === MCP_EDIT && values) {
+      if (!srv) throw new Error(`${rowId} is not in the list any more: reopen the page`);
+      const next = this.mcpBody(rowId, values.scope || srv.scope, mcpFormValues(values));
+      // `claude mcp` has no edit: remove, then add the new one (the old one comes back if that fails)
+      const cfg = srv.config ?? {};
+      const oldType = str(cfg.type) || (cfg.url ? 'http' : 'stdio');
+      const old = this.mcpBody(rowId, srv.scope, {
+        remote: oldType !== 'stdio',
+        type: oldType,
+        command: [str(cfg.command), ...(Array.isArray(cfg.args) ? cfg.args.map(String) : [])].filter(Boolean),
+        env: cfg.env ?? {},
+        url: str(cfg.url),
+        headers: cfg.headers ?? {},
+      });
+      await this.mcpChange(rowId, 'Saving…', async () => {
+        await this.deleteMcp(rowId, srv.scope);
+        try {
+          await this.postMcp(next);
+        } catch (e) {
+          await this.postMcp(old).catch(() => undefined);
+          throw e;
+        }
+      });
+      return `Saved '${rowId}'`;
+    }
   }
 
   // --- Plugins & marketplaces
 
-  private async loadPlugins() {
+  private async fetchPlugins(): Promise<any> {
     try {
-      this.plugins = await this.b.bridgeJson('/api/claude/plugins', {}, SLOW);
+      return await this.b.bridgeJson('/api/claude/plugins', {}, SLOW);
     } catch (e) {
-      this.plugins = { success: false, error: this.err(e) };
+      return { success: false, error: this.err(e) };
     }
+  }
+
+  private get plugins(): any | null {
+    return this.pluginList.value;
   }
 
   private pluginsPage(): SettingsPage {
@@ -634,7 +763,7 @@ export class ClaudeSettings implements AgentSettingsProvider {
       return `${PLUGIN_DONE[action] ?? 'Done:'} ${label}`;
     } finally {
       this.busy.delete(`plugin:${k}`);
-      await this.loadPlugins();
+      await this.pluginList.reload(PAGE_WAIT_MS);
       this.changed();
     }
   }
@@ -645,9 +774,9 @@ export class ClaudeSettings implements AgentSettingsProvider {
     const cwd = this.b.workspaceDir();
     const q = cwd ? `&cwd=${encodeURIComponent(cwd)}` : '';
     const [user, project, auto] = await Promise.all([
-      this.b.bridgeJson('/api/claude/memory?scope=user').catch((e) => ({ success: false, error: this.err(e) })),
-      this.b.bridgeJson(`/api/claude/memory?scope=project${q}`).catch((e) => ({ success: false, error: this.err(e) })),
-      this.b.bridgeJson(`/api/claude/memory/auto${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`).catch((e) => ({ success: false, error: this.err(e) })),
+      this.read('/api/claude/memory?scope=user').catch((e) => ({ success: false, error: this.err(e) })),
+      this.read(`/api/claude/memory?scope=project${q}`).catch((e) => ({ success: false, error: this.err(e) })),
+      this.read(`/api/claude/memory/auto${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`).catch((e) => ({ success: false, error: this.err(e) })),
     ]);
     this.memory = { user, project };
     this.autoMemory = auto;
@@ -716,7 +845,7 @@ export class ClaudeSettings implements AgentSettingsProvider {
 
   private async loadCliJob() {
     try {
-      const r = await this.b.bridgeJson('/api/claude/cli/job');
+      const r = await this.read('/api/claude/cli/job');
       this.cliJob = r?.job ?? null;
     } catch {
       /* keep */
@@ -728,6 +857,8 @@ export class ClaudeSettings implements AgentSettingsProvider {
         if (!this.cliJob?.running && this.jobPoll) {
           clearInterval(this.jobPoll);
           this.jobPoll = null;
+          const ok = this.cliJob?.exit_code === 0;
+          this.b.notify(ok ? 'info' : 'error', ok ? `Claude Code ${this.cliJob?.kind === 'update' ? 'update' : 'install'} finished` : `Claude Code ${this.cliJob?.kind ?? 'install'} failed`);
           void this.b.loadStatus();
           void this.b.loadInfo(true);
         }
@@ -735,29 +866,92 @@ export class ClaudeSettings implements AgentSettingsProvider {
     }
   }
 
-  private cliPage(): SettingsPage {
+  private cliItems(): SettingItem[] {
     const c = this.b.cli;
+    const st = this.b.status();
     const job = this.cliJob;
     const running = job?.running === true;
     const items: SettingItem[] = [
-      { kind: 'info', id: 'installed', label: 'Installed', value: !c ? 'Checking…' : c.installed ? 'Yes' : 'No', tone: !c ? 'muted' : c.installed ? 'ok' : 'error' },
-      { kind: 'info', id: 'version', label: 'Version', value: c?.version || '—' },
-      { kind: 'info', id: 'path', label: 'Path', value: c?.bin_path || '—', tone: 'muted' },
-      c?.installed
-        ? { kind: 'button', id: 'update', label: 'Check for updates', disabled: running }
-        : { kind: 'button', id: 'install', label: 'Install Claude Code', style: 'primary', disabled: running || !c },
+      {
+        kind: 'info',
+        id: 'claude.cli.state',
+        label: 'Claude Code CLI',
+        value: !c ? (st.state === 'starting' ? 'Checking…' : 'Could not check') : c.installed ? (st.version ?? 'Installed') : 'Not installed',
+        tone: !c ? (st.state === 'starting' ? 'muted' : 'error') : c.installed ? 'ok' : 'warn',
+        description: !c ? (st.state === 'starting' ? null : (st.detail ?? null)) : (c.bin_path ?? null),
+      },
     ];
+    if (c)
+      items.push(
+        c.installed
+          ? { kind: 'button', id: 'update', label: running ? 'Checking…' : 'Check for updates', disabled: running }
+          : { kind: 'button', id: 'install', label: running ? 'Installing…' : 'Install Claude Code', style: 'primary', disabled: running },
+      );
     if (job) {
       items.push({
         kind: 'info',
         id: 'job',
-        label: running ? `${job.kind || 'Job'} running…` : `${job.kind || 'Job'} finished`,
-        value: running ? '' : job.exit_code === 0 ? 'Done' : `Exit ${job.exit_code ?? '?'}`,
+        label: job.kind === 'update' ? 'Update' : 'Install',
+        value: running ? 'running…' : job.exit_code === 0 ? 'done' : `failed (exit ${job.exit_code ?? '?'})`,
         tone: running ? 'warn' : job.exit_code === 0 ? 'ok' : 'error',
       });
-      if (job.log) items.push({ kind: 'text', id: 'log', label: 'Log', value: String(job.log).split('\n').slice(-30).join('\n'), multiline: true, disabled: true });
+      if (job.log) items.push({ kind: 'text', id: 'log', label: 'Log', value: String(job.log).split('\n').slice(-30).join('\n'), multiline: true, code: true, rows: 10, disabled: true });
     }
-    return { id: 'claude.cli', title: 'Claude Code CLI', sections: [this.section('cli', items)] };
+    return items;
+  }
+
+  private accountItems(): SettingItem[] {
+    const cli = this.b.cli;
+    const a = cli?.auth;
+    const account: SettingItem[] = [
+      {
+        kind: 'info',
+        id: 'claude.account',
+        label: 'Account',
+        value: !cli ? '…' : !cli.installed ? 'Install Claude Code first' : a?.loggedIn ? a.email || 'Signed in' : cli.auth_error ? 'Unknown' : 'Not signed in',
+        tone: a?.loggedIn ? 'ok' : cli?.installed ? 'warn' : 'muted',
+        description: a?.loggedIn
+          ? [a.subscriptionType ? `Plan: ${planLabel(a.subscriptionType)}` : null, a.authMethod ? `via ${a.authMethod}` : null].filter(Boolean).join(' · ') || null
+          : (cli?.auth_error ?? null),
+      },
+    ];
+    // no sign-in / sign-out button until the account state is known
+    if (this.login) {
+      account.push({ kind: 'info', id: 'claude.login', label: 'Signing in…', value: this.login.state, tone: 'warn', description: 'Finish in the browser. If it shows a code, paste it here.' });
+      account.push({ kind: 'button', id: 'claude.signin.open', label: 'Open the sign-in page again', style: 'primary', disabled: !this.login.automatic_url });
+      account.push({ kind: 'button', id: 'claude.signin.manual', label: 'Browser can’t return here? Open the code page', disabled: !this.login.manual_url });
+      account.push({ kind: 'button', id: 'claude.signin.code', label: 'Enter the code', form: [{ id: 'code', label: 'Code from the code page', kind: 'text', placeholder: 'code#state', required: true }] });
+      account.push({ kind: 'button', id: 'claude.signin.cancel', label: 'Cancel sign-in' });
+    } else if (a?.loggedIn) account.push({ kind: 'button', id: 'claude.signout', label: 'Sign out', style: 'danger', confirm: 'Sign out of Claude Code?' });
+    else if (cli?.installed)
+      account.push({
+        kind: 'button',
+        id: 'claude.signin',
+        label: 'Sign in',
+        style: 'primary',
+        form: [
+          {
+            id: 'method',
+            label: 'Account',
+            kind: 'select',
+            value: 'claudeai',
+            options: [
+              { value: 'claudeai', label: 'Claude subscription', description: 'Pro, Max, Team or Enterprise' },
+              { value: 'console', label: 'Anthropic Console', description: 'API billing' },
+            ],
+          },
+        ],
+      });
+    account.push({ kind: 'button', id: 'claude.refresh', label: 'Check again' });
+    return account;
+  }
+
+  /** Account & CLI (the app's Account page): the CLI, the account, then what is left of the plan's limits. */
+  private cliPage(): SettingsPage {
+    const a = this.b.cli?.auth;
+    const sections = [this.section('cli', this.cliItems()), this.section('account', this.accountItems())];
+    if (a?.loggedIn || this.b.usage) sections.push(this.section('usage', this.usageItems(), '', 'What is left of each limit, and when it resets'));
+    return { id: 'claude.cli', title: 'Account & CLI', sections };
   }
 
   // --- Advanced: settings.json as text
@@ -778,6 +972,8 @@ export class ClaudeSettings implements AgentSettingsProvider {
               description: cs?.path ?? null,
               value: JSON.stringify(cs?.settings ?? {}, null, 2),
               multiline: true,
+              code: true,
+              rows: 24,
             },
             { kind: 'button', id: 'reload', label: 'Reload' },
           ],
@@ -792,7 +988,7 @@ export class ClaudeSettings implements AgentSettingsProvider {
 
   /** Reads settings.json fresh, applies [change], writes it back. */
   private async writeSettings(change: (s: Record<string, any>) => void) {
-    const r = await this.b.bridgeJson('/api/claude/settings');
+    const r = await this.read('/api/claude/settings');
     if (!r?.success || !r.settings || typeof r.settings !== 'object') throw new Error(r?.error ?? "Couldn't read settings.json, nothing was changed");
     const next = JSON.parse(JSON.stringify(r.settings));
     change(next);
@@ -883,6 +1079,8 @@ export class ClaudeSettings implements AgentSettingsProvider {
   async action(page: string, id: string, rowId?: string, actionId?: string, values?: Record<string, string>): Promise<string | void> {
     switch (page) {
       case 'claude':
+      case 'claude.cli':
+        if (id === 'install' || id === 'update') return this.cliAction(id);
         return this.accountAction(id, values);
       case 'claude.permissions':
         if (id.startsWith('rules.')) {
@@ -908,29 +1106,7 @@ export class ClaudeSettings implements AgentSettingsProvider {
         }
         return;
       case 'claude.mcp':
-        if (id === 'reload') {
-          await this.loadMcp();
-          this.changed();
-          return;
-        }
-        if ((id === 'servers' && actionId === 'add' && values) || (id === 'preset.stitch' && values)) return this.addMcp(values!);
-        if (id === 'servers' && actionId === 'remove' && rowId) {
-          const srv = this.mcp?.servers.find((s: any) => s.name === rowId);
-          const cwd = this.b.workspaceDir();
-          const q = `name=${encodeURIComponent(rowId)}${srv?.scope ? `&scope=${encodeURIComponent(srv.scope)}` : ''}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`;
-          this.busy.set(`mcp:${rowId}`, 'Removing…');
-          this.changed();
-          try {
-            const r = await this.b.bridgeSend('DELETE', `/api/claude/mcp?${q}`, undefined, SLOW);
-            if (!r?.success) throw new Error(r?.error ?? 'Remove failed');
-          } finally {
-            this.busy.delete(`mcp:${rowId}`);
-            await this.loadMcp();
-            this.changed();
-          }
-          return `Removed '${rowId}'`;
-        }
-        return;
+        return this.mcpAction(id, rowId, actionId, values);
       case 'claude.plugins':
         if (id === 'install' && values?.plugin?.trim()) return this.pluginAction('install', { plugin: values.plugin.trim(), scope: 'user' });
         if (id === 'search') {
@@ -972,53 +1148,55 @@ export class ClaudeSettings implements AgentSettingsProvider {
           this.changed();
         }
         return;
-      case 'claude.cli':
-        if (id === 'install' || id === 'update') {
-          const r = await this.b.bridgeSend('POST', `/api/claude/cli/${id}`, {});
-          if (!r?.success) throw new Error(r?.error ?? `${id} failed to start`);
-          this.cliJob = r.job ?? null;
-          await this.loadCliJob();
-          this.changed();
-          return id === 'install' ? 'Installing Claude Code…' : 'Updating Claude Code…';
-        }
-        return;
     }
   }
 
-  private async addMcp(v: Record<string, string>): Promise<string> {
-    const name = (v.name ?? '').trim();
-    if (!name) throw new Error('Enter a name');
-    const transport = v.transport || 'stdio';
-    const parts = (v.command ?? '').trim().split(/\s+/).filter(Boolean);
-    if (transport === 'stdio' && !parts.length) throw new Error('Enter the command');
-    if (transport !== 'stdio' && !(v.url ?? '').trim()) throw new Error('Enter the URL');
-    const cwd = this.b.workspaceDir();
-    const body = {
-      name,
-      scope: v.scope || 'user',
-      transport,
-      command: transport === 'stdio' ? parts[0] : '',
-      args: transport === 'stdio' ? parts.slice(1) : [],
-      env: transport === 'stdio' ? pairs(v.env, '=') : {},
-      url: transport === 'stdio' ? '' : v.url.trim(),
-      headers: transport === 'stdio' ? {} : pairs(v.headers, ':'),
-      cwd,
-    };
-    this.busy.set(`mcp:${name}`, 'Adding…');
+  private async cliAction(id: 'install' | 'update'): Promise<string> {
+    const r = await this.b.bridgeSend('POST', `/api/claude/cli/${id}`, {}, 15_000);
+    if (!r?.success) throw new Error(r?.error ?? `${id} failed to start`);
+    this.cliJob = r.job ?? null;
+    await this.loadCliJob();
     this.changed();
-    try {
-      const r = await this.b.bridgeSend('POST', '/api/claude/mcp', body, SLOW);
-      if (!r?.success) throw new Error(`Could not add '${name}': ${lastLine(r?.error) ?? 'Add failed'}`);
-      // added: the status check connects to it (can take a few seconds)
-      this.busy.set(`mcp:${name}`, 'Connecting…');
-      this.changed();
-      await this.loadMcp();
-    } finally {
-      this.busy.delete(`mcp:${name}`);
-      this.changed();
+    return id === 'install' ? 'Installing Claude Code…' : 'Checking for a Claude Code update…';
+  }
+
+  private async addMcp(v: Record<string, string>): Promise<string> {
+    const f = mcpFormValues(v);
+    if (!f.name) throw new Error('Enter a name');
+    if ((this.mcpList.value ?? []).some((s: any) => s.name === f.name)) throw new Error(`"${f.name}" exists already: edit it instead`);
+    // added: the status check connects to it (can take a few seconds)
+    await this.mcpChange(f.name, 'Adding…', () => this.postMcp(this.mcpBody(f.name, v.scope || 'user', f)));
+    const added = (this.mcpList.value ?? []).find((s: any) => s.name === f.name);
+    return added?.status === 'connected' ? `'${f.name}' connected · ${(added.tools ?? []).length} tools` : added?.status === 'failed' ? `'${f.name}' was added but failed to connect` : `Added '${f.name}'`;
+  }
+
+  /** A preset tile (the app's Claude MCP presets): `claude mcp add --scope user` through the bridge — transport http
+   *  with its URL and --header lines, or stdio with command and args. */
+  private async addPreset(tileId: string, values?: Record<string, string>): Promise<string> {
+    await this.mcpList.ensure(PAGE_WAIT_MS);
+    const tap = presetTap(tileId, values, (this.mcpList.value ?? []).map((s: any) => ({ name: String(s.name), url: s.url ?? s.config?.url ?? null })));
+    if (tap.kind === 'done') return tap.message;
+    if (tap.kind === 'custom') {
+      if (!values) throw new Error('Fill in the server to add');
+      return this.addMcp(values);
     }
-    const added = this.mcp?.servers.find((s: any) => s.name === name);
-    return added?.status === 'connected' ? `'${name}' connected · ${(added.tools ?? []).length} tools` : added?.status === 'failed' ? `'${name}' was added but failed to connect` : `Added '${name}'`;
+    const p = tap.preset;
+    const stdio = p.transport === 'stdio';
+    const body = this.mcpBody(p.serverName, 'user', {
+      remote: !stdio,
+      type: stdio ? 'stdio' : 'http',
+      command: stdio ? [p.command ?? '', ...(p.args ?? [])] : [],
+      env: {},
+      url: stdio ? '' : (p.url ?? ''),
+      headers: stdio ? {} : presetHeaders(p),
+    });
+    // a same-named server at another address (e.g. the phone app's) is replaced: `claude mcp add` will not overwrite
+    if (tap.replace) {
+      const old = (this.mcpList.value ?? []).find((s: any) => String(s.name).toLowerCase() === p.serverName.toLowerCase());
+      await this.deleteMcp(p.serverName, old?.scope);
+    }
+    await this.mcpChange(p.serverName, tap.replace ? 'Updating…' : 'Adding…', () => this.postMcp(body));
+    return `${tap.replace ? 'Updated' : 'Added'} ${p.name}`;
   }
 
   // --- account: sign in / out (ClaudeAccountManager)
@@ -1026,13 +1204,15 @@ export class ClaudeSettings implements AgentSettingsProvider {
   private async accountAction(id: string, values?: Record<string, string>): Promise<string | void> {
     switch (id) {
       case 'claude.refresh':
-        await this.b.loadStatus();
+        await Promise.allSettled([this.b.loadStatus(), this.loadCliJob()]);
+        this.changed();
         return;
       case 'claude.usage.refresh':
         await this.b.loadUsage(true);
+        if (this.b.usageError) throw new Error(`Could not update the usage: ${this.b.usageError}`);
         return;
       case 'claude.signout': {
-        const r = await this.b.bridgeSend('POST', '/api/claude/auth/logout', {});
+        const r = await this.b.bridgeSend('POST', '/api/claude/auth/logout', {}, 30_000);
         if (!r?.success) throw new Error(`Sign-out failed: ${r?.error ?? 'unknown error'}`);
         this.b.usage = null;
         await this.b.loadStatus();
@@ -1040,13 +1220,17 @@ export class ClaudeSettings implements AgentSettingsProvider {
         return 'Signed out of Claude';
       }
       case 'claude.signin': {
-        if (this.login) return 'Sign-in is already open in your browser';
-        const r = await this.b.bridgeSend('POST', '/api/claude/auth/login', { method: values?.method === 'console' ? 'console' : 'claudeai' });
+        if (this.login) {
+          if (this.login.automatic_url) this.b.openUrl(this.login.automatic_url);
+          return 'Sign-in is already open in your browser';
+        }
+        this.b.notify('info', 'Opening Claude sign-in…');
+        const r = await this.b.bridgeSend('POST', '/api/claude/auth/login', { method: values?.method === 'console' ? 'console' : 'claudeai' }, 60_000);
         if (!r?.success || !r.login) throw new Error(`Sign-in could not start: ${r?.error ?? 'unknown error'}`);
         this.login = r.login;
         this.pollLogin();
         this.changed();
-        return 'Opening Claude sign-in in your browser…';
+        return;
       }
       case 'claude.signin.open':
         if (this.login?.automatic_url) this.b.openUrl(this.login.automatic_url);
@@ -1057,14 +1241,14 @@ export class ClaudeSettings implements AgentSettingsProvider {
       case 'claude.signin.code': {
         const code = (values?.code ?? '').trim();
         if (!this.login || !code) return;
-        const r = await this.b.bridgeSend('POST', `/api/claude/auth/login/${encodeURIComponent(this.login.login_id)}/code`, { code });
+        const r = await this.b.bridgeSend('POST', `/api/claude/auth/login/${encodeURIComponent(this.login.login_id)}/code`, { code }, 60_000);
         if (!r?.success) throw new Error(`Code rejected: ${r?.error ?? 'unknown error'}`);
         return;
       }
       case 'claude.signin.cancel': {
         const l = this.login;
         this.stopLogin();
-        if (l) await this.b.bridgeSend('DELETE', `/api/claude/auth/login/${encodeURIComponent(l.login_id)}`).catch(() => undefined);
+        if (l) await this.b.bridgeSend('DELETE', `/api/claude/auth/login/${encodeURIComponent(l.login_id)}`, undefined, 10_000).catch(() => undefined);
         this.changed();
         return;
       }
@@ -1095,7 +1279,9 @@ export class ClaudeSettings implements AgentSettingsProvider {
           if (st.state === 'success') {
             void this.b.loadInfo(true);
             void this.b.loadUsage(true);
-          }
+            this.b.notify('info', `Signed in to Claude${this.b.cli?.auth?.email ? ` as ${this.b.cli.auth.email}` : ''}`);
+          } else if (st.state === 'error') this.b.notify('error', `Claude sign-in failed${st.error ? `: ${st.error}` : ''}`);
+          else if (st.state !== 'cancelled') this.b.notify('warning', 'Claude sign-in timed out. Try again from Settings → Claude Code → Account & CLI.');
         }
         this.changed();
       } catch {

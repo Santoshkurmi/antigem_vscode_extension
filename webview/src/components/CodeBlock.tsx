@@ -349,6 +349,11 @@ function PreviewFrame(props: { code: string; reload: number }) {
 function RunDialog(props: { command: string; onClose: () => void }) {
   const [value, setValue] = createSignal(props.command);
   const single = !props.command.includes('\n');
+  // several lines shown, the rest on "Show more"; long lines scroll sideways instead of wrapping
+  const PREVIEW = 6;
+  const lineCount = () => value().split('\n').length;
+  const [more, setMore] = createSignal(false);
+  const rows = () => Math.max(1, Math.min(more() ? 18 : PREVIEW, lineCount()));
   const runNow = () => {
     const cmd = value().trim();
     if (!cmd) return;
@@ -389,7 +394,8 @@ function RunDialog(props: { command: string; onClose: () => void }) {
         <span class="run-prompt">$</span>
         <textarea
           class="run-input"
-          rows={single ? 1 : Math.min(12, props.command.split('\n').length)}
+          rows={rows()}
+          wrap="off"
           value={value()}
           ref={(el) => setTimeout(() => (el.focus({ preventScroll: true }), el.setSelectionRange(el.value.length, el.value.length)), 60)}
           onInput={(e) => setValue(e.currentTarget.value)}
@@ -402,6 +408,11 @@ function RunDialog(props: { command: string; onClose: () => void }) {
           spellcheck={false}
         />
       </div>
+      <Show when={lineCount() > PREVIEW}>
+        <button class="run-more" onClick={() => setMore(!more())}>
+          {more() ? 'Show less ▲' : `Show more (${lineCount() - PREVIEW} more lines) ▼`}
+        </button>
+      </Show>
       <div class="run-hint">
         {single ? 'Press Enter to run · closing the terminal stops everything in it' : 'Shift+Enter or Run to start · closing the terminal stops everything in it'}
       </div>

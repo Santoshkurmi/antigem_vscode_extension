@@ -1,6 +1,6 @@
 // The single screen of the app (ui/chat/ChatScreen.kt): drawer, top bar, chat feed, the panels docked above the
 // input, and the input bar. Sidebar = phone layout; an editor tab centers the same column (max 820px).
-import { createEffect, createSignal, For, on, onCleanup, onMount } from 'solid-js';
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { Drawer } from './components/Drawer';
 import { TopBar } from './components/TopBar';
 import { Feed } from './components/Feed';
@@ -22,7 +22,15 @@ import { themePanelOpen, setThemePanelOpen } from './state/settings';
 import { clearToolExpansion } from './components/ToolCallCard';
 import { clearThoughtState } from './components/Thinking';
 import { clearCodeState } from './components/CodeBlock';
-import { openLinkedConversation, send, setState, state } from './state/store';
+import { chooseFirstAgents, firstRun, openLinkedConversation, send, setState, state } from './state/store';
+import { FirstRunAgents } from './components/AgentSetup';
+import { NotesScreen, setNotesOpen } from './components/Notes';
+import { JarvisCommandStrip } from './components/JarvisCommand';
+import { JarvisOverlay } from './components/JarvisOverlay';
+import { JarvisPanel } from './components/JarvisPanel';
+import { host } from './host';
+import { openSettings } from './state/settings';
+import { openConversation } from './state/store';
 import { Icon } from './ui/primitives';
 
 export function App() {
@@ -55,6 +63,20 @@ export function App() {
     else if (el.dataset.file) send({ type: 'openFile', path: el.dataset.file, line: el.dataset.line ? +el.dataset.line : undefined });
   };
 
+  // Jarvis (a tool, a notice) asks for a screen: a chat, the notes, a settings page
+  onMount(() =>
+    host.onMessage((m) => {
+      if (m.type !== 'jarvisNavigate') return;
+      setDrawerOpen(false);
+      if (m.screen === 'notes') setNotesOpen(true);
+      else if (m.screen === 'settings') openSettings(m.settingsPage && m.settingsPage !== 'root' ? { id: m.settingsPage, title: 'Settings' } : undefined);
+      else if (m.screen === 'chat' && m.conversationId) {
+        setNotesOpen(false);
+        openConversation(m.conversationId);
+      }
+    }),
+  );
+
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
     if (themePanelOpen()) setThemePanelOpen(false);
@@ -75,12 +97,20 @@ export function App() {
           <ConnectionBanner />
           <ApprovalPanel />
           <QuestionPanel />
+          {/* a Jarvis chat's command strip (mission, steps, autopilot, tasks; the board) */}
+          <Show when={!state.chat.readOnly && state.chat.conversationId} keyed>
+            {(id) => <JarvisCommandStrip chatId={id} />}
+          </Show>
           {/* the agent's controls strip (ClaudeControlsStrip / CodexControlsStrip / OpenCodeControlsStrip) */}
-          <ControlsStrip />
+          <Show when={!state.chat.readOnly}>
+            <ControlsStrip />
+          </Show>
           <InputBar />
         </main>
       </div>
-      <Drawer open={drawerOpen()} onClose={() => setDrawerOpen(false)} />
+      <Drawer open={drawerOpen()} onClose={() => setDrawerOpen(false)} onNotes={() => (setDrawerOpen(false), setNotesOpen(true))} />
+      <NotesScreen />
+      <JarvisOverlay />
       <SettingsScreen />
       <ModelSheet />
       <ThemeQuickPanel />
@@ -91,6 +121,10 @@ export function App() {
       <ImageViewerHost />
       <DropZone />
       <TerminatedDialogHost />
+      <JarvisPanel />
+      <Show when={firstRun()}>
+        <FirstRunAgents onDone={chooseFirstAgents} />
+      </Show>
       <Toasts />
     </div>
   );

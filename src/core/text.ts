@@ -37,6 +37,11 @@ export function hiddenBlock(body: string): string {
   return `<${TAG} command="${escapeAttr('')}">\n${body}\n</${TAG}>`;
 }
 
+/** [body] goes to the model; the chat shows only [label] in its place (e.g. Jarvis' one-line news label). */
+export function labeledBlock(label: string, body: string): string {
+  return `<${TAG} command="${escapeAttr(label)}">\n${body.split(`</${TAG}>`).join(`</${TAG}⁠>`)}\n</${TAG}>`;
+}
+
 export interface FileRef {
   path: string;
   mimeType: string;

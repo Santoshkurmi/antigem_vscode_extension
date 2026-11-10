@@ -17,6 +17,8 @@ import { AgySettings } from './AgySettings';
 
 const EMIT_INTERVAL_MS = 33;
 const DEFAULT_PROJECT_ID = 'default-cli-project';
+/** Status detail when agy itself is missing (the hub can't start without it). */
+export const AGY_NOT_INSTALLED = "agy is not installed. Install it from Settings → Antigravity → Account & CLI.";
 const IDLE = 'CASCADE_RUN_STATUS_IDLE';
 const MEDIA_MAX = 8 * 1024 * 1024;
 const IMAGE_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp' };
@@ -629,8 +631,39 @@ export class AgyBackend implements AgentBackend {
 
   status(): AgentStatus {
     const signedIn = this.settings.signedIn();
-    const detail = this.hubState === 'online' && signedIn === false ? 'Not signed in' : this.hubDetail;
-    return { kind: 'AGY', label: 'Antigravity', state: this.hubState, detail, account: this.settings.accountLabel() };
+    // agy itself missing (the bridge's CLI check) while the hub is down: that is why
+    const installed = this.settings.cliInstalled();
+    const missing = this.hubState !== 'online' && installed === false;
+    // the hub stopped for a missing agy that is there now (installed in a terminal): it starts with the bridge
+    const installedSince = this.hubState === 'not_installed' && installed === true;
+    const state: AgentStatus['state'] = missing ? 'not_installed' : installedSince ? 'error' : this.hubState;
+    const detail =
+      state === 'not_installed'
+        ? AGY_NOT_INSTALLED
+        : installedSince
+          ? 'agy is installed now: restart the bridge (Settings → Bridge & connection) to start Antigravity.'
+          : this.hubState === 'online' && signedIn === false
+            ? 'Not signed in'
+            : this.hubDetail;
+    return {
+      kind: 'AGY',
+      label: 'Antigravity',
+      state,
+      detail,
+      account: this.settings.accountLabel(),
+      version: this.settings.cliVersion(),
+      plan: this.settings.planLabel(),
+      setupPage: 'agy.cli',
+    };
+  }
+
+  /** The hub answers now, or within `ms` while it is starting (settings pages wait at most that long). */
+  async waitOnline(ms: number): Promise<boolean> {
+    const ready = () => this.hubState === 'online' && !!this.csrf;
+    const starting = () => this.hubState === 'starting' || (this.hubState === 'online' && !this.csrf);
+    const end = Date.now() + ms;
+    while (!ready() && starting() && Date.now() < end) await new Promise((r) => setTimeout(r, 150));
+    return ready();
   }
 
   onChange(cb: (w: BackendChange) => void) {
@@ -705,7 +738,14 @@ export class AgyBackend implements AgentBackend {
     await tick();
   }
 
+  private lastCliCheck = 0;
+
   private async pollHub() {
+    // the installed agy (version, or missing) is read again now and then while the hub is down, and on each restart
+    if (this.hubState !== 'online' && Date.now() - this.lastCliCheck > 20_000) {
+      this.lastCliCheck = Date.now();
+      void this.settings.refreshCli();
+    }
     try {
       if (this.bridge.state !== 'running') await this.bridge.ensureRunning();
       const hs = await this.bridge.hubStatus();
@@ -722,6 +762,9 @@ export class AgyBackend implements AgentBackend {
           }
         }
         this.setHub('online', null);
+      } else if (hs.status === 'error' && /not installed/i.test(hs.error)) {
+        // "agy is not installed at … (install it in the app: …)": say where to install it here
+        this.setHub('not_installed', AGY_NOT_INSTALLED);
       } else if (hs.status === 'error') {
         this.setHub('error', hs.error || 'Antigravity hub error');
       } else if (hs.status === 'starting' || hs.status === 'idle' || (hs.status === 'online' && !hs.csrfToken)) {
@@ -779,17 +822,22 @@ export class AgyBackend implements AgentBackend {
   }
 
   /** Unary call with already-encoded request bytes (writes that must keep the hub's other fields). */
-  async callHubRaw(name: string, request: Uint8Array): Promise<Buffer> {
+  async callHubRaw(name: string, request: Uint8Array, timeoutMs?: number): Promise<Buffer> {
     const rpc = await this.rpcReady();
     try {
-      return await rpc.callRaw(name, request);
+      return await rpc.callRaw(name, request, timeoutMs);
     } catch (e) {
       if (e instanceof GrpcError && e.isAuth) {
         this.invalidateCsrf();
-        return (await this.rpcReady()).callRaw(name, request);
+        return (await this.rpcReady()).callRaw(name, request, timeoutMs);
       }
       throw e;
     }
+  }
+
+  /** The account or the installed agy changed: the agents list (drawer, Accounts) shows it. */
+  notifyStatus() {
+    this.changed('status');
   }
 
   bridgeJson<T = any>(p: string, init: RequestInit = {}): Promise<T> {
@@ -839,6 +887,8 @@ export class AgyBackend implements AgentBackend {
         if (this.quotaGroups.length) this.changed('models');
       }, 60_000);
     }
+    // the hub (re)started: the agy it runs may be a new one (installed, updated)
+    void this.settings.refreshCli();
     this.reconnectAll();
   }
 
@@ -1003,12 +1053,15 @@ export class AgyBackend implements AgentBackend {
     }
   }
 
-  /** One-line notice above the composer: hub down, signed out, or background work the next message waits for. */
+  /**
+   * One-line notice above the composer: hub down, signed out, or — only while a message of the user's is actually
+   * waiting in the queue — the background work it waits for (never while nothing was sent).
+   */
   noticeFor(s: AgySession): string | null {
     if (this.hubState !== 'online') return this.hubDetail ?? 'Antigravity is not running';
     if (this.settings.signedIn() === false) return 'Not signed in to Antigravity: sign in from Settings → Antigravity';
     const conv = this.convs.get(s.id);
-    if (!conv || s.engine.isRunning || s.optimisticTag) return null;
+    if (!conv || s.engine.isRunning || s.optimisticTag || !s.queued().length) return null;
     const info = this.summaryInfo.get(s.id);
     const streamBusy = s.hasFrames && !s.engine.fullyIdle;
     if (!streamBusy && !conv.notFullyIdle && !info?.backgroundTasks && !info?.subagents) return null;

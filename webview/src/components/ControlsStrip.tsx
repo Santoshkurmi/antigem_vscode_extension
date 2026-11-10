@@ -7,7 +7,7 @@ import type { ControlChipView } from '@shared/protocol';
 import { setControl, state } from '../state/store';
 import { agentAccent, agentLabel } from '../util/format';
 import { BottomSheet, Icon, type IconName } from '../ui/primitives';
-import { iconPaths } from '../ui/iconData';
+import { hasIcon } from '../ui/iconData';
 import { AgentMark } from './AgentStatus';
 
 const MUTED = 'color-mix(in srgb, var(--on-surface) 75%, transparent)';
@@ -56,7 +56,7 @@ const ICONS: Record<string, IconName> = {
   schedule: 'schedule',
 };
 const iconOf = (hint: string | null | undefined): IconName | null =>
-  !hint ? null : (ICONS[hint] ?? (hint in iconPaths ? (hint as IconName) : null));
+  !hint ? null : (ICONS[hint] ?? (hasIcon(hint) ? hint : null));
 
 function toneColor(c: ControlChipView): string {
   if (isModeChip(c) && MODE_COLORS[c.value]) return MODE_COLORS[c.value];

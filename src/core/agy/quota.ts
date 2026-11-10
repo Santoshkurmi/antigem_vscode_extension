@@ -29,8 +29,9 @@ export function parseQuotaSummary(res: any): QuotaGroup[] {
     const id = lower.includes('argon') ? 'argon' : lower.includes('claude') || lower.includes('gpt') ? 'claude_gpt' : lower.includes('gemini') ? 'gemini' : lower.replace(/\s+/g, '_');
     let fiveHour: QuotaWindow | null = null;
     let weekly: QuotaWindow | null = null;
+    // every 5h / weekly bucket the server sends, like the app (a "disabled" 5h limit — e.g. while the weekly one is
+    // used up — is still shown)
     for (const b of g.buckets ?? []) {
-      if (b.disabled) continue;
       const w = String(b.window ?? '').toLowerCase();
       const win = { remaining: Math.max(0, Math.min(1, Number(b.remaining_fraction ?? 0))), resetAt: tsMillis(b.reset_time) };
       if (w.includes('5h')) fiveHour = { label: '5h', ...win };
@@ -118,7 +119,8 @@ export function groupOf(m: AiModel, groups: QuotaGroup[], overrides: Record<stri
 }
 
 function windowView(w: QuotaWindow): QuotaWindowView {
-  return { label: w.label, remaining: w.remaining, resetText: countdownText(w.resetAt) };
+  // share left, one decimal ("48.8%"), as the app's model picker and chat pill
+  return { label: w.label, remaining: w.remaining, resetText: countdownText(w.resetAt), text: quotaPercentText(w.remaining) };
 }
 
 /** Model picker sections and each model's chat-pill text. `pill` = which limit the pill shows (app default 5h). */

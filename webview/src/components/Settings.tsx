@@ -17,10 +17,15 @@ import {
   settingAction,
   settings,
   type StackEntry,
+  busyLabel,
+  isBusy,
+  pageRequestedAt,
+  retryPage,
 } from '../state/settings';
 import { agentStatus, setUi, state } from '../state/store';
 import { BottomSheet, Dialog, DropdownMenu, Icon, IconButton, nextFrame, type IconName } from '../ui/primitives';
 import { AgentMark } from './AgentStatus';
+import { hasIcon } from '../ui/iconData';
 import { agentAccent, alpha, stateColor } from '../util/format';
 import { ThemesPage, themeName } from './Themes';
 import { fontScale } from '../theme';
@@ -147,6 +152,16 @@ function PageBody(props: { entry: StackEntry }) {
 function HostPage(props: { id: string }) {
   const page = () => settings.pages[props.id];
   const isRoot = () => props.id === 'root';
+  // nothing after 15 s: an error with Retry instead of an endless spinner
+  const [late, setLate] = createSignal(false);
+  createEffect(() => {
+    const asked = pageRequestedAt(props.id);
+    setLate(false);
+    if (page() || !asked) return;
+    const t = window.setTimeout(() => !page() && setLate(true), Math.max(0, 15_000 - (Date.now() - asked)));
+    onCleanup(() => clearTimeout(t));
+  });
+  const error = () => page()?.error || (late() && !page() ? "The extension didn't send this page. It may still be starting." : null);
   return (
     <div class="settings-content">
       <Show when={isRoot()}>
@@ -164,16 +179,36 @@ function HostPage(props: { id: string }) {
         />
       </Show>
       <Show
-        when={page()}
+        when={!error()}
         fallback={
-          <Show when={!isRoot()}>
-            <div class="settings-loading">
-              <span class="head-spinner" />
-            </div>
-          </Show>
+          <div class="settings-error">
+            <Icon name="cloud_off" size={40} />
+            <div class="settings-error-title">Couldn't load this page</div>
+            <div class="settings-error-text">{error()}</div>
+            <button
+              class="filled-btn accent"
+              onClick={() => {
+                setLate(false);
+                retryPage(props.id);
+              }}
+            >
+              <Icon name="refresh_f" size={16} /> Retry
+            </button>
+          </div>
         }
       >
-        <For each={page()!.sections}>{(s) => <SectionView section={s} pageId={props.id} />}</For>
+        <Show
+          when={page()}
+          fallback={
+            <Show when={!isRoot()}>
+              <div class="settings-loading">
+                <span class="head-spinner" />
+              </div>
+            </Show>
+          }
+        >
+          <For each={page()!.sections}>{(s) => <SectionView section={s} pageId={props.id} />}</For>
+        </Show>
       </Show>
     </div>
   );
@@ -454,6 +489,9 @@ function ItemView(props: { item: SettingItem; pageId: string; section: SettingsS
         <Match when={it().kind === 'select'}>
           <SelectItem item={as('select')} pageId={props.pageId} />
         </Match>
+        <Match when={it().kind === 'presets'}>
+          <PresetsItem item={as('presets')} pageId={props.pageId} />
+        </Match>
         <Match when={it().kind === 'checklist'}>
           <ChecklistItem item={as('checklist')} pageId={props.pageId} />
         </Match>
@@ -522,6 +560,71 @@ function ToggleItem(props: { item: Extract<SettingItem, { kind: 'toggle' }>; pag
 }
 
 /** Chips (ControlChip) for a few short options, radio rows when options explain themselves, a sheet for long lists. */
+/** A preset tile's accent: a theme token name ('primary', 'warning', 'accent-teal'…) or a color. */
+const accentOf = (a: string | null | undefined) => (!a ? 'var(--primary)' : /^(#|rgb|hsl|var\()/.test(a) ? a : `var(--${a})`);
+
+/**
+ * The MCP screens' preset grid (SettingsDialog.kt McpPresetTile): two tiles a row, each an accent icon box, the name
+ * (✓ when added) and a two-line subtitle ("Added · tap to edit" once added). A tap sends the tile's action, after its
+ * form when it has one (Stitch's API key); the tile spins until the host's settingDone.
+ */
+function PresetsItem(props: { item: Extract<SettingItem, { kind: 'presets' }>; pageId: string }) {
+  const [formFor, setFormFor] = createSignal<string | null>(null);
+  const tile = () => props.item.tiles.find((t) => t.id === formFor()) ?? null;
+  const run = (id: string, values?: Record<string, string>) => settingAction(props.pageId, props.item.id, { actionId: id, values });
+  return (
+    <>
+      <Show when={props.item.label || props.item.description}>
+        <Label label={props.item.label} description={props.item.description} />
+      </Show>
+      <div class="preset-grid">
+        <For each={props.item.tiles}>
+          {(t) => {
+            const accent = () => accentOf(t.accent);
+            const busy = () => isBusy(props.pageId, props.item.id, null, t.id);
+            const icon = (): IconName => (hasIcon(t.icon) ? t.icon : 'extension');
+            return (
+              <button
+                class="preset-tile"
+                classList={{ added: !!t.added, busy: busy() }}
+                style={{ '--accent': accent() }}
+                disabled={t.disabled || busy()}
+                onClick={() => (t.form?.length ? setFormFor(t.id) : run(t.id))}
+              >
+                <span class="preset-icon">
+                  <Show when={busy()} fallback={<Icon name={icon()} size={19} />}>
+                    <span class="mini-spinner" />
+                  </Show>
+                </span>
+                <span class="preset-text">
+                  <span class="preset-name-row">
+                    <span class="preset-name">{t.name}</span>
+                    <Show when={t.added}>
+                      <Icon name="check_circle" size={13} class="preset-check" />
+                    </Show>
+                  </span>
+                  <span class="preset-sub">{t.added ? 'Added · tap to edit' : t.subtitle}</span>
+                </span>
+              </button>
+            );
+          }}
+        </For>
+      </div>
+      <FormDialog
+        open={!!tile()}
+        title={tile()?.name ?? ''}
+        fields={tile()?.form ?? []}
+        confirmLabel={tile()?.added ? 'Save' : 'Add'}
+        onClose={() => setFormFor(null)}
+        onSubmit={(v) => {
+          const t = tile();
+          if (t) run(t.id, v);
+        }}
+      />
+    </>
+  );
+}
+
 const AGENT_KINDS: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'];
 const isAgentList = (options: SettingOption[]) => options.length > 0 && options.every((o) => AGENT_KINDS.includes(o.value as AgentKind));
 
@@ -697,9 +800,9 @@ function EditableText(props: { item: Extract<SettingItem, { kind: 'text' }>; pag
   return (
     <>
       <Label label={props.item.label} description={props.item.description} />
-      <div class="text-item-row">
+      <div class="text-item-row" classList={{ code: !!props.item.code }}>
         <Show
-          when={props.item.multiline}
+          when={props.item.multiline || props.item.code}
           fallback={
             <input
               class="outlined-field single"
@@ -713,7 +816,24 @@ function EditableText(props: { item: Extract<SettingItem, { kind: 'text' }>; pag
         >
           <textarea
             class="outlined-field"
-            rows={3}
+            classList={{ code: !!props.item.code }}
+            rows={props.item.rows ?? (props.item.code ? 12 : 3)}
+            spellcheck={!props.item.code}
+            onKeyDown={(e) => {
+              // a code editor indents with Tab; Ctrl/Cmd+S saves
+              if (props.item.code && e.key === 'Tab' && !e.shiftKey) {
+                e.preventDefault();
+                const t = e.currentTarget;
+                const a = t.selectionStart;
+                const v = t.value.substring(0, a) + '  ' + t.value.substring(t.selectionEnd);
+                setDraft(v);
+                t.value = v;
+                t.setSelectionRange(a + 2, a + 2);
+              } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+                save();
+              }
+            }}
             value={draft()}
             placeholder={props.item.placeholder ?? ''}
             disabled={props.item.disabled}
@@ -751,6 +871,8 @@ function ButtonItem(props: { item: Extract<SettingItem, { kind: 'button' }>; pag
   // values of a form that still has to be confirmed
   let pending: Record<string, string> | undefined;
   const run = (values?: Record<string, string>) => settingAction(props.pageId, props.item.id, { values });
+  // from the click until the host's settingDone ("Signing in…")
+  const busyNow = () => isBusy(props.pageId, props.item.id);
   const click = () => {
     pending = undefined;
     if (props.item.form?.length) setForm(true);
@@ -764,11 +886,14 @@ function ButtonItem(props: { item: Extract<SettingItem, { kind: 'button' }>; pag
       </Show>
       <button
         class={props.item.style === 'primary' ? 'filled-btn accent' : 'outlined-btn'}
-        classList={{ danger: props.item.style === 'danger' }}
-        disabled={props.item.disabled}
+        classList={{ danger: props.item.style === 'danger', busy: busyNow() }}
+        disabled={props.item.disabled || busyNow()}
         onClick={click}
       >
-        {props.item.label}
+        <Show when={busyNow()} fallback={props.item.label}>
+          <span class="mini-spinner" />
+          {busyLabel(props.item.label)}
+        </Show>
       </button>
       <ConfirmDialog
         open={confirm()}
@@ -851,8 +976,9 @@ function ListRow(props: { row: SettingListRow; itemId: string; pageId: string })
     else send(a);
   };
   const tone = () => toneColor(props.row.statusTone) ?? alpha('var(--on-surface)', 0.45);
+  const running = () => actions().find((a) => isBusy(props.pageId, props.itemId, props.row.id, a.id));
   return (
-    <div class="list-row">
+    <div class="list-row" classList={{ busy: !!running() }}>
       <div class="list-row-text">
         <div class="list-row-title">{props.row.title}</div>
         <div class="list-row-meta">
@@ -869,7 +995,13 @@ function ListRow(props: { row: SettingListRow; itemId: string; pageId: string })
       <Show when={props.row.toggle != null}>
         <MSwitch checked={!!props.row.toggle} label={props.row.title} onChange={(v) => changeSetting(props.pageId, props.itemId, v, props.row.id)} />
       </Show>
-      <Show when={actions().length === 1}>
+      <Show when={running()}>
+        <span class="busy-chip">
+          <span class="mini-spinner" />
+          {busyLabel(running()!.label)}
+        </span>
+      </Show>
+      <Show when={actions().length === 1 && !running()}>
         <Show
           when={actions()[0].danger}
           fallback={
@@ -881,7 +1013,7 @@ function ListRow(props: { row: SettingListRow; itemId: string; pageId: string })
           <IconButton icon="delete_o" size={36} iconSize={20} color="color-mix(in srgb, var(--danger) 80%, transparent)" title={actions()[0].label} onClick={() => run(actions()[0])} />
         </Show>
       </Show>
-      <Show when={actions().length > 1}>
+      <Show when={actions().length > 1 && !running()}>
         <IconButton ref={(el) => (menuBtn = el)} icon="more_vert" size={32} iconSize={18} color={alpha('var(--on-surface)', 0.6)} title="More" onClick={() => setMenu(true)} />
         <DropdownMenu
           anchor={() => menuBtn}
@@ -925,9 +1057,12 @@ function ListRow(props: { row: SettingListRow; itemId: string; pageId: string })
   );
 }
 
-/** Plan / quota usage as the app's UsageBar: label, "% used · resets …", a bar colored by how much is used. */
+/**
+ * Plan / quota limits as the app's UsageBar, worded as what is LEFT (like the model sheet and the composer pill):
+ * label, "48.8% left · resets …" (the agent's own formatting when it sends one), a bar of the share left.
+ */
 function QuotaItem(props: { label: string; groups: ModelGroupView[] }) {
-  const usageColor = (used: number) => (used >= 0.9 ? 'var(--danger)' : used >= 0.7 ? 'var(--warning)' : 'var(--success)');
+  const leftColor = (left: number) => (left > 0.5 ? 'var(--success)' : left > 0.2 ? 'var(--warning)' : 'var(--danger)');
   return (
     <div class="quota-item">
       <Show when={props.label}>
@@ -941,17 +1076,18 @@ function QuotaItem(props: { label: string; groups: ModelGroupView[] }) {
             </Show>
             <For each={g.windows ?? []}>
               {(w) => {
-                const used = () => Math.max(0, Math.min(1, 1 - w.remaining));
+                const left = () => Math.max(0, Math.min(1, w.remaining));
+                const pct = () => w.text?.trim() || `${Math.round(left() * 100)}%`;
                 return (
                   <div class="usage-bar">
                     <div class="usage-bar-top">
                       <span class="usage-label">{w.label}</span>
                       <span class="usage-text">
-                        {Math.round(used() * 100)}% used{w.resetText ? ` · resets ${w.resetText}` : ''}
+                        {pct()} left{w.resetText ? ` · resets ${w.resetText.replace(/^in /, 'in ')}` : ''}
                       </span>
                     </div>
                     <div class="usage-track">
-                      <span style={{ width: `${used() * 100}%`, background: usageColor(used()) }} />
+                      <span style={{ width: `${left() * 100}%`, background: leftColor(left()) }} />
                     </div>
                   </div>
                 );

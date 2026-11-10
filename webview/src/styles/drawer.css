@@ -721,3 +721,61 @@
   line-height: calc(16 * var(--sp));
   color: color-mix(in srgb, var(--on-surface) 60%, transparent);
 }
+.header-round.power {
+  color: color-mix(in srgb, var(--error) 75%, transparent);
+}
+.header-round.power:hover {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+.drawer-hit-snippet mark:empty,
+.search-row mark:empty,
+.mention-name mark:empty {
+  display: none;
+}
+
+/* ---- Jarvis tab: the chip and "New Jarvis chat" (JarvisNewChatRow) */
+.filter-chip.jarvis-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 7px;
+}
+.jarvis-new-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 24px);
+  margin: 6px 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, #22d3ee 35%, transparent);
+  background: color-mix(in srgb, #22d3ee 9%, transparent);
+  color: var(--on-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.jarvis-new-row:hover {
+  background: color-mix(in srgb, #22d3ee 14%, transparent);
+}
+.jarvis-new-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.jarvis-new-title {
+  font-size: calc(13.5 * var(--sp));
+  line-height: calc(20 * var(--sp));
+  font-weight: 600;
+}
+.jarvis-new-sub {
+  font-size: calc(11 * var(--sp));
+  line-height: calc(15 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

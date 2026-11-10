@@ -59,6 +59,8 @@ export interface SessionSummary {
   live: boolean;
   busy: boolean;
   archived: boolean;
+  /** Subagent runs of the chat (Agent / Task tool), oldest first. */
+  subagents?: import('./ClaudeSubagent').SubagentWire[];
 }
 
 export interface ModelInfo {

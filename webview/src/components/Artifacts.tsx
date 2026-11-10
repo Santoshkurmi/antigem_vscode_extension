@@ -1,10 +1,11 @@
 // ui/drawer/ArtifactsDrawerContent.kt in ChatScreen.kt's right-side overlay: a 55% black scrim (fade 220/200 ms) and a
 // panel that slides in from the right (tween 260 / 220 ms, FastOutSlowIn), 85% wide. Opened from the layers button
 // in an assistant reply's footer (shown when the chat has artifacts). A card opens the file in VS Code.
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createResource, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import type { ArtifactSnapshot } from '@shared/model';
-import { send, state } from '../state/store';
+import { readImage, send, state } from '../state/store';
+import { openImageViewer } from './Media';
 import { Icon, IconButton, nextFrame, type IconName } from '../ui/primitives';
 
 export const [artifactsOpen, setArtifactsOpen] = createSignal(false);
@@ -114,13 +115,30 @@ function ArtifactCard(props: { artifact: ArtifactSnapshot }) {
   const k = () => kindOf(a());
   const title = () => displayTitle(a());
   const subtitle = () => baseName(a().name.trim() ? a().name : a().absoluteUri);
-  const open = () => send({ type: 'openFile', path: pathOf(a()) });
+  const [thumb] = createResource(() => (isImage(a()) ? pathOf(a()) : null), (p) => readImage(p));
+  const open = () => (isImage(a()) && thumb() ? openImageViewer({ src: thumb(), path: pathOf(a()), title: a().name }) : send({ type: 'openFile', path: pathOf(a()) }));
   return (
     <div class="art-card" role="button" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === 'Enter' && open()} title={pathOf(a())}>
       <div class="art-card-row">
-        <span class="art-card-icon" style={{ color: k().tint, background: `color-mix(in srgb, ${k().tint} 16%, transparent)` }}>
-          <Icon name={k().icon} size={20} />
-        </span>
+        <Show
+          when={thumb()}
+          fallback={
+            <span class="art-card-icon" style={{ color: k().tint, background: `color-mix(in srgb, ${k().tint} 16%, transparent)` }}>
+              <Icon name={k().icon} size={20} />
+            </span>
+          }
+        >
+          {/* an image artifact: its thumbnail (46dp, rounded 8), a click opens the viewer */}
+          <img
+            class="art-thumb"
+            src={thumb()!}
+            alt=""
+            onClick={(e) => {
+              e.stopPropagation();
+              openImageViewer({ src: thumb(), path: pathOf(a()), title: a().name });
+            }}
+          />
+        </Show>
         <span class="art-card-text">
           <span class="art-card-title">{title()}</span>
           <Show when={subtitle() && subtitle() !== title()}>

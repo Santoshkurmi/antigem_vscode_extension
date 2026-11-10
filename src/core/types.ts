@@ -21,6 +21,8 @@ export interface ChatState {
   notice?: string | null;
   /** The model this chat uses (per-chat model agents); the model pill prefers it. */
   modelId?: string | null;
+  /** The chat cannot take messages; the text says why (a Claude subagent's transcript). */
+  readOnly?: string | null;
 }
 
 export interface SendRequest {

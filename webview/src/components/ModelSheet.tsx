@@ -266,7 +266,7 @@ function QuotaMeter(props: { w: QuotaWindowView }) {
         <span class="quota-fill" style={{ width: `${left() * 100}%`, background: quotaColor(left()) }} />
       </span>
       <span class="quota-pct" style={{ color: quotaColor(left()) }}>
-        {Math.round(left() * 100)}%
+        {props.w.text?.trim() || `${Math.round(left() * 100)}%`}
       </span>
       <Show when={props.w.resetText}>
         <span class="quota-time"> · {props.w.resetText}</span>

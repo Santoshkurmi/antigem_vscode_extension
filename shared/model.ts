@@ -63,6 +63,8 @@ export interface ToolCall {
   trajectoryId?: string | null;
   interactionType?: string | null;
   questionnaire?: ChoiceQuestionnaire | null;
+  /** A subagent run (Claude Agent/Task tool): the conversation that shows its own transcript (in the drawer under the chat). */
+  subagentConversationId?: string | null;
 }
 
 export interface TokenUsage {
@@ -117,6 +119,26 @@ export interface ChatMessage {
   attachments: ChatAttachment[];
   createdAt: number;
   modelId?: string | null;
+  /**
+   * Jarvis: this USER message is news Jarvis' app sent to a Jarvis chat (its `content` is the one-line label
+   * "⚡ Jarvis · Build: done"). Render it as the event card (the app's JarvisEventCard), not as a user bubble.
+   */
+  jarvisEvents?: JarvisEventView[] | null;
+}
+
+/** Jarvis: one piece of news inside a labelled Jarvis message (the app's JarvisEvents.Parsed). */
+export interface JarvisEventView {
+  /** task_done | task_failed | task_stalled | task_approval | task_question | nudge | autopilot_paused */
+  kind: string;
+  /** The task's title ("" for mission news: show "Mission"). */
+  title: string;
+  team: string;
+  /** claude | agy | opencode | codex ("" for mission news). */
+  agent: string;
+  /** The task's chat id ("" for mission news): the card's ↗ opens it while the task is still listed. */
+  taskId: string;
+  /** What the sub-agent reported (its reply, the error, the question, the action waiting for approval). */
+  text: string;
 }
 
 export interface Conversation {
@@ -138,6 +160,10 @@ export interface Conversation {
   agent: AgentKind;
   archived: boolean;
   cloudProjectId?: string | null;
+  /** Jarvis: a Jarvis chat (listed under the drawer's Jarvis tab, drawn with the bot icon). */
+  isJarvis?: boolean;
+  /** Jarvis: leave it out of All and the agent tabs (Settings → Jarvis → "Jarvis chats in the chat list"). */
+  jarvisHidden?: boolean;
 }
 
 export interface QueuedMessage {

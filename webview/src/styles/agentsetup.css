@@ -1,0 +1,409 @@
+/*
+ * AgentSetup.tsx: the first-run agent choice (OnboardingStepScreen + AgentChoiceDialog + AgentSelector) and the
+ * empty-chat AgentSetupPrompt. 1dp = 1px; text = sp × var(--sp). Text without its own style is bodyLarge
+ * (24sp line height, 0.5sp letter spacing), as everywhere else in the webview.
+ */
+
+/* ------------------------------------------------------------------ OnboardingStepScreen */
+
+/* Dialog(usePlatformDefaultWidth = false) > Surface(fillMaxSize, background) > Column(verticalGradient accent 10% → transparent → transparent) */
+.onb-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background-color: var(--background);
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--accent) 10%, transparent) 0%,
+    transparent 50%,
+    transparent 100%
+  );
+  color: var(--on-surface);
+  font-family: var(--font);
+  font-size: calc(14 * var(--sp));
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  font-weight: 400;
+  text-align: left;
+}
+
+/* one step: Spacer(18dp) instead of the progress row */
+.onb-top-space {
+  height: 18px;
+  flex-shrink: 0;
+}
+
+/* Column(widthIn(max = 560dp), fillMaxWidth, padding(horizontal = 22dp, vertical = 14dp)) */
+.onb-progress {
+  width: 100%;
+  max-width: 560px;
+  flex-shrink: 0;
+  padding: 14px 22px;
+}
+.onb-progress-bars {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.onb-progress-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--on-surface) 12%, transparent);
+}
+.onb-progress-bar.done {
+  background: var(--accent);
+}
+.onb-progress-label {
+  margin-top: 8px;
+  font-size: calc(11 * var(--sp));
+  font-weight: 700;
+  letter-spacing: calc(1 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+
+/*
+ * Column(weight(1f), widthIn(max = 560dp), fillMaxWidth, verticalScroll, padding(horizontal = 22dp)): the scroller
+ * spans the full width so the wheel and the scrollbar work anywhere; the 560dp column sits centered in it.
+ */
+.onb-scroll {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.onb-body {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  /* Spacer(18dp) on top, Spacer(20dp) after the content */
+  padding: 18px 22px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Box(72dp, CircleShape, radialGradient(accent 28% → accent 6%)) */
+.onb-icon {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    circle closest-side,
+    color-mix(in srgb, var(--accent) 28%, transparent),
+    color-mix(in srgb, var(--accent) 6%, transparent)
+  );
+}
+
+/* Text(24sp, Bold, Center, onSurface) after Spacer(16dp) */
+.onb-title {
+  margin-top: 16px;
+  font-size: calc(24 * var(--sp));
+  font-weight: 700;
+  text-align: center;
+  color: var(--on-surface);
+}
+
+/* Text(14sp, lineHeight 20sp, Center, onSurface 65%) after Spacer(8dp) */
+.onb-subtitle {
+  margin-top: 8px;
+  font-size: calc(14 * var(--sp));
+  line-height: calc(20 * var(--sp));
+  text-align: center;
+  color: color-mix(in srgb, var(--on-surface) 65%, transparent);
+}
+
+/* content() after Spacer(22dp) */
+.onb-content {
+  margin-top: 22px;
+  width: 100%;
+}
+
+/* HorizontalDivider(onSurface 6%), full width */
+.onb-divider {
+  width: 100%;
+  height: 1px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--on-surface) 6%, transparent);
+}
+
+/* Column(widthIn(max = 560dp), fillMaxWidth, padding(horizontal = 22dp, vertical = 14dp), CenterHorizontally) */
+.onb-bottom {
+  width: 100%;
+  max-width: 560px;
+  flex-shrink: 0;
+  padding: 14px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/*
+ * Button(RoundedCornerShape(16dp), container accent, content White, fillMaxWidth, height 52dp): content padding
+ * 24dp × 8dp; label 15.5sp SemiBold on labelLarge (20sp line height, 0.1sp spacing). Disabled: Material3's
+ * onSurface 12% container and onSurface 38% content.
+ */
+.onb-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 52px;
+  padding: 8px 24px;
+  border-radius: 16px;
+  background-color: var(--accent);
+  color: #fff;
+  font-size: calc(15.5 * var(--sp));
+  font-weight: 600;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  text-align: center;
+  cursor: pointer;
+}
+.onb-primary:hover:not(:disabled) {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08));
+}
+.onb-primary:active:not(:disabled) {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.12));
+}
+.onb-primary:disabled {
+  background-color: color-mix(in srgb, var(--on-surface) 12%, transparent);
+  color: color-mix(in srgb, var(--on-surface) 38%, transparent);
+  cursor: default;
+}
+
+/* footnote: Spacer(8dp), Text(11.5sp, Center, onSurface 50%) */
+.onb-footnote {
+  margin-top: 8px;
+  font-size: calc(11.5 * var(--sp));
+  text-align: center;
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+
+/* ------------------------------------------------------------------ AgentChoiceDialog icon */
+
+/* Box(52dp) with an AgentMark(28dp) in each corner, AgentKind.entries order */
+.fra-marks {
+  position: relative;
+  width: 52px;
+  height: 52px;
+}
+.fra-marks-cell {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+}
+.fra-marks-cell.top-start {
+  top: 0;
+  left: 0;
+}
+.fra-marks-cell.top-end {
+  top: 0;
+  right: 0;
+}
+.fra-marks-cell.bottom-start {
+  bottom: 0;
+  left: 0;
+}
+.fra-marks-cell.bottom-end {
+  bottom: 0;
+  right: 0;
+}
+
+/* ------------------------------------------------------------------ AgentSelector */
+
+/* Column(spacedBy(10dp)) */
+.fra-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+/*
+ * Surface(RoundedCornerShape(16dp), fillMaxWidth): off = surface with a 1dp onSurface 12% border, on = accent 8%
+ * with a 1.5dp accent 80% border. Row(padding(14dp)): Compose draws the border over the padding, so the CSS
+ * padding is 14dp minus the border (the content stays put when the border changes).
+ */
+.fra-card {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 13px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--on-surface) 12%, transparent);
+  background-color: var(--surface);
+  color: var(--on-surface);
+  text-align: left;
+  cursor: pointer;
+}
+.fra-card.on {
+  padding: 12.5px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 80%, transparent);
+  background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.fra-card:hover {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--on-surface) 8%, transparent),
+    color-mix(in srgb, var(--on-surface) 8%, transparent)
+  );
+}
+.fra-card:active {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--on-surface) 10%, transparent),
+    color-mix(in srgb, var(--on-surface) 10%, transparent)
+  );
+}
+
+/* Spacer(12dp), Column(weight(1f)) */
+.fra-card-text {
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+  display: flex;
+  flex-direction: column;
+}
+/* Text(15sp, SemiBold) */
+.fra-card-title {
+  font-size: calc(15 * var(--sp));
+  font-weight: 600;
+}
+/* Text(12sp, lineHeight 16sp, onSurface 62%) */
+.fra-card-desc {
+  font-size: calc(12 * var(--sp));
+  line-height: calc(16 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 62%, transparent);
+}
+
+/* Spacer(10dp), Box(20dp, RoundedCornerShape(6dp), border 1.5dp onSurface 30% / accent, background accent when on) */
+.fra-check {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1.5px solid color-mix(in srgb, var(--on-surface) 30%, transparent);
+}
+.fra-card.on .fra-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* Text("✓", White, 13sp, Bold) */
+.fra-check-mark {
+  color: #fff;
+  font-size: calc(13 * var(--sp));
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* Text(11.5sp, onSurface 55%, padding(horizontal = 4dp)) */
+.fra-hint {
+  padding: 0 4px;
+  font-size: calc(11.5 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 55%, transparent);
+}
+
+/* ------------------------------------------------------------------ AgentSetupPrompt */
+
+/* Column(fillMaxWidth, padding(horizontal = 24dp), CenterHorizontally) */
+.asp {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 0 24px;
+  color: var(--on-surface);
+  font-family: var(--font);
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+
+/* Spacer(16dp), Text(titleMedium = 16sp / 24sp / 0.15sp, SemiBold, onSurface) */
+.asp-title {
+  margin-top: 16px;
+  font-size: calc(16 * var(--sp));
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.15 * var(--sp));
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+/* Spacer(8dp), Text(bodyMedium = 14sp / 20sp / 0.25sp, onSurfaceVariant 75%, Center) */
+.asp-text {
+  margin-top: 8px;
+  font-size: calc(14 * var(--sp));
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.25 * var(--sp));
+  font-weight: 400;
+  text-align: center;
+  color: color-mix(in srgb, var(--on-surface-variant) 75%, transparent);
+}
+
+/*
+ * Spacer(20dp), Button(RoundedCornerShape(12dp), container accent, content White, padding 24dp × 10dp): 40dp tall,
+ * min 58dp wide, in Material3's 48dp touch target (4dp above and below); label 14sp Medium on labelLarge.
+ */
+.asp-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  min-height: 40px;
+  margin: 24px 0 4px;
+  padding: 10px 24px;
+  border-radius: 12px;
+  background-color: var(--accent);
+  color: #fff;
+  font-size: calc(14 * var(--sp));
+  font-weight: 500;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  text-align: center;
+  cursor: pointer;
+}
+.asp-action:hover {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08));
+}
+.asp-action:active {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.12));
+}
+
+/*
+ * TextButton: fully rounded, padding 12dp × 8dp, 40dp tall, min 58dp wide, in the 48dp touch target; label 13sp in
+ * onSurface 65% (labelLarge: Medium, 20sp line height, 0.1sp spacing).
+ */
+.asp-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  min-height: 40px;
+  margin: 4px 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--on-surface) 65%, transparent);
+  font-size: calc(13 * var(--sp));
+  font-weight: 500;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  text-align: center;
+  cursor: pointer;
+}
+.asp-secondary:hover {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.asp-secondary:active {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}

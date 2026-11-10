@@ -1,6 +1,7 @@
 // OpenCode's settings pages (ports of the app's OpenCodeSettingsScreen.kt — OpenCodeSettingsGroup and its pages Server &
 // install, Permissions, Providers, MCP servers — OpenCodeProvidersPage.kt with ProviderSignInSheet / AllProvidersSheet /
-// ModelsCard / CustomProviderDialog, and OpenCodeMcpPage.kt). Everything goes to the bridge.
+// ModelsCard / CustomProviderDialog, and OpenCodeMcpPage.kt). Everything goes to the bridge, with timeouts: a page
+// OpenCode can't serve (not installed, bridge down) says so at once.
 import type { AiModel } from '../../../shared/model';
 import type { SettingFormField, SettingItem, SettingListRow, SettingsPage, SettingsSection } from '../../../shared/protocol';
 import type { AgentSettingsProvider } from '../types';
@@ -26,6 +27,40 @@ import {
 import type { OpenCodeCliJob, OpenCodeCredential, OpenCodeCustomModel, OpenCodeCustomProvider, OpenCodeMcpServer } from './client';
 import { DEFAULT_AGENTS, MODES, STATE_LABELS, agentDescription, arr, capitalize, errMsg, modeDescription, modeLabel, providerOf, str, type Json } from './common';
 import type { OpenCodeBackend } from './OpenCodeBackend';
+import {
+  Cached,
+  MCP_EDIT,
+  MCP_LIST,
+  MCP_PRESETS,
+  MCP_RECONNECT,
+  MCP_REFRESH_ALL,
+  MCP_REMOVE,
+  blockedReason,
+  joinCommand,
+  mcpForm,
+  mcpFormValues,
+  mcpPage,
+  mcpSummary,
+  presetTap,
+  presetHeaders,
+  presetsItem,
+  unavailablePage,
+  waitFor,
+  withTimeout,
+  type McpServerView,
+  type McpState,
+} from '../agy/settingsKit';
+
+/** A page waits this long for OpenCode's status while it is checked. */
+const WAIT_MS = 3_000;
+/** A list read from OpenCode is waited for this long; then the page shows what it has and updates later. */
+const PAGE_WAIT_MS = 8_000;
+
+const TITLES: Record<string, string> = {
+  'opencode.providers': 'Providers',
+  'opencode.models': 'Models',
+  'opencode.mcp': 'MCP servers',
+};
 
 /** Subscriptions people sign in with most, shown first (id → title and hint), as the app's quick tiles. */
 const QUICK: [string, string, string][] = [
@@ -39,8 +74,6 @@ const QUICK: [string, string, string][] = [
   ['anthropic', 'Anthropic API', 'Claude models · key'],
 ];
 
-/** MCP presets that make sense on a PC (the app's other presets are its own on-phone servers). */
-const STITCH = { name: 'stitch', url: 'https://stitch.googleapis.com/mcp', header: 'X-Goog-Api-Key' };
 
 /** A running sign-in. */
 interface SignIn extends Attempt {
@@ -52,33 +85,6 @@ interface SignIn extends Attempt {
   startedAt: number;
 }
 
-/** "Key: value" / "KEY=value" lines → map (blank lines skipped). */
-function parsePairs(text: string | undefined, sep: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of (text ?? '').split('\n').map((l) => l.trim())) {
-    const i = line.indexOf(sep);
-    if (line && i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-  }
-  return out;
-}
-
-/** A command line → its words (quotes keep spaces together). */
-function splitCommand(text: string): string[] {
-  const out: string[] = [];
-  let cur = '';
-  let quote: string | null = null;
-  for (const c of text.trim()) {
-    if (quote && c === quote) quote = null;
-    else if (!quote && (c === '"' || c === "'")) quote = c;
-    else if (!quote && /\s/.test(c)) {
-      if (cur) out.push(cur);
-      cur = '';
-    } else cur += c;
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
 const MCP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export class OpenCodeSettings implements AgentSettingsProvider {
@@ -86,15 +92,20 @@ export class OpenCodeSettings implements AgentSettingsProvider {
   private integrationsError: string | null = null;
   private credentials: OpenCodeCredential[] = [];
   private customs: OpenCodeCustomProvider[] | null = null;
-  private mcp: OpenCodeMcpServer[] | null = null;
-  private mcpError: string | null = null;
+  private mcp: Cached<OpenCodeMcpServer[]>;
+  private busy = new Map<string, string>();
   private job: OpenCodeCliJob | null = null;
   private jobPoll: NodeJS.Timeout | null = null;
   private signIn: SignIn | null = null;
   private signInPoll: NodeJS.Timeout | null = null;
   private countsLoading = false;
 
-  constructor(private b: OpenCodeBackend) {}
+  constructor(private b: OpenCodeBackend) {
+    this.mcp = new Cached(
+      () => this.fetchMcp(),
+      () => this.changed(),
+    );
+  }
 
   private changed() {
     this.b.changed('settings');
@@ -104,7 +115,7 @@ export class OpenCodeSettings implements AgentSettingsProvider {
 
   rootItem(): SettingItem {
     const st = this.b.ocState;
-    const v = this.b.ocStatus?.version;
+    const v = this.b.status().version;
     return {
       kind: 'page',
       id: 'opencode',
@@ -119,52 +130,62 @@ export class OpenCodeSettings implements AgentSettingsProvider {
   private loadCounts() {
     if (this.countsLoading || this.b.ocState !== 'ready') return;
     this.countsLoading = true;
-    void Promise.allSettled([this.loadCustoms(), this.loadMcp(), this.loadIntegrations()]).then(() => this.changed());
+    void Promise.allSettled([
+      withTimeout(this.loadCustoms(), PAGE_WAIT_MS, 'OpenCode'),
+      this.mcp.ensure(PAGE_WAIT_MS),
+      withTimeout(this.loadIntegrations(), PAGE_WAIT_MS, 'OpenCode'),
+    ]).then(() => this.changed());
   }
 
+  /** OpenCode's page: links only, as the app's OpenCodeSettingsGroup (OpenCode CLI / Permissions, Providers, Models,
+   *  MCP servers). Built from what is known: instant. */
   private mainPage(): SettingsPage {
-    if (this.customs == null || this.mcp == null) this.loadCounts();
+    if (this.customs == null || this.mcp.value == null) this.loadCounts();
     const st = this.b.ocState;
     const status = this.b.ocStatus;
     const ready = st === 'ready';
-    const server: SettingItem[] = [
-      {
-        kind: 'info',
-        id: 'opencode.state',
-        label: 'OpenCode',
-        value: [STATE_LABELS[st], status?.version, status?.running ? 'server running' : null].filter(Boolean).join(' · '),
-        tone: ready ? 'ok' : st === 'checking' ? 'warn' : 'error',
-      },
-    ];
-    if (status?.binary) server.push({ kind: 'info', id: 'opencode.binary', label: 'Binary', value: status.binary, tone: 'muted' });
-    if (status?.error && (!ready || status.running === false)) server.push({ kind: 'info', id: 'opencode.error', label: 'Last error', value: status.error, tone: 'error' });
-    if (ready) {
-      server.push({ kind: 'info', id: 'opencode.events', label: 'Live updates', value: this.b.isConnected ? 'Connected' : 'Connecting…', tone: this.b.isConnected ? 'ok' : 'warn' });
-      server.push(this.restartButton('opencode.restart'));
-    } else if (st === 'not_installed') server.push(this.installButton('opencode.install'));
     const connected = this.b.connectedProviders.length + (this.customs?.length ?? 0);
     const all = this.b.allModels.length;
     const shown = this.b.models().models.length;
-    const pages: SettingItem[] = [
-      { kind: 'page', id: 'opencode.cli', label: 'Server & install', icon: 'dns', description: 'Install, update and restart OpenCode', badge: ready ? (status?.version ?? STATE_LABELS[st]) : STATE_LABELS[st] },
-      { kind: 'page', id: 'opencode.permissions', label: 'Permissions', icon: 'tune', description: 'What OpenCode asks before acting, and the agent of new chats', badge: modeLabel(this.b.prefMode()) },
-      {
-        kind: 'page',
-        id: 'opencode.providers',
-        label: 'Providers',
-        icon: 'cloud',
-        description: 'Sign in or add an API key, or add any OpenAI- or Anthropic-compatible API manually',
-        badge: connected > 0 ? `${connected} connected` : all ? 'Free models' : null,
-      },
-      { kind: 'page', id: 'opencode.models', label: 'Models', icon: 'view_list', description: 'Turn providers or models off in the model picker', badge: all ? `${shown}/${all}` : null },
-      { kind: 'page', id: 'opencode.mcp', label: 'MCP servers', icon: 'hub', description: 'Tools OpenCode can call: presets and your own servers', badge: this.mcp?.length ? `${this.mcp.length} servers` : null },
-    ];
+    const servers = this.mcp.value && !this.mcp.error ? this.mcpViews() : null;
+    const v = this.b.status().version;
     return {
       id: 'opencode',
       title: 'OpenCode',
       sections: [
-        { id: 'server', title: '', agent: 'OPENCODE', items: server },
-        { id: 'pages', title: '', agent: 'OPENCODE', items: pages },
+        {
+          id: 'cli',
+          title: '',
+          agent: 'OPENCODE',
+          items: [
+            {
+              kind: 'page',
+              id: 'opencode.cli',
+              label: 'OpenCode CLI',
+              icon: 'terminal',
+              description: [STATE_LABELS[st], v ? `OpenCode ${v}` : null, status?.running ? 'server running' : null].filter(Boolean).join(' · '),
+              badge: ready ? (v ?? STATE_LABELS[st]) : STATE_LABELS[st],
+            },
+          ],
+        },
+        {
+          id: 'pages',
+          title: '',
+          agent: 'OPENCODE',
+          items: [
+            { kind: 'page', id: 'opencode.permissions', label: 'Permissions', icon: 'tune', description: 'What OpenCode asks before acting, and the agent of new chats', badge: modeLabel(this.b.prefMode()) },
+            {
+              kind: 'page',
+              id: 'opencode.providers',
+              label: 'Providers',
+              icon: 'cloud',
+              description: 'Sign in or add an API key, or add any OpenAI- or Anthropic-compatible API manually',
+              badge: connected > 0 ? `${connected} connected` : all ? 'Free models' : null,
+            },
+            { kind: 'page', id: 'opencode.models', label: 'Models', icon: 'view_list', description: 'Turn providers or models off in the model picker', badge: all ? `${shown}/${all}` : null },
+            { kind: 'page', id: 'opencode.mcp', label: 'MCP servers', icon: 'hub', description: 'Tools OpenCode can call', badge: mcpSummary(servers) },
+          ],
+        },
       ],
     };
   }
@@ -194,24 +215,35 @@ export class OpenCodeSettings implements AgentSettingsProvider {
 
   // ------------------------------------------------------------------ pages
 
+  /** Why OpenCode's pages can't be read now (null = they can). Waits a little while it is checked. */
+  private async blocked(): Promise<string | null> {
+    if (this.b.ocState === 'checking') await waitFor(() => this.b.ocState !== 'checking', WAIT_MS);
+    return this.b.ocState === 'ready' ? null : blockedReason(this.b.status());
+  }
+
   async page(id: string): Promise<SettingsPage | null> {
+    if (id === 'opencode') return this.mainPage();
+    if (id === 'opencode.cli') {
+      // works with OpenCode missing too: it is where it is installed
+      await Promise.allSettled([withTimeout(this.b.refreshStatus(), WAIT_MS, 'The bridge'), withTimeout(this.loadJob(), WAIT_MS, 'The bridge')]);
+      return this.cliPage();
+    }
+    if (id === 'opencode.permissions') return this.permissionsPage();
+    if (!(id in TITLES)) return null;
+    const why = await this.blocked();
+    if (why) return unavailablePage(id, TITLES[id], 'OPENCODE', why, { page: 'opencode.cli', label: 'OpenCode CLI', description: 'Install OpenCode, or see why it isn’t running' });
     switch (id) {
-      case 'opencode':
-        return this.mainPage();
-      case 'opencode.permissions':
-        return this.permissionsPage();
-      case 'opencode.providers':
-        await Promise.allSettled([this.loadIntegrations(), this.loadCustoms(), this.loadCredentials()]);
-        return this.providersPage();
+      case 'opencode.providers': {
+        const r = await Promise.allSettled([this.loadIntegrations(), this.loadCustoms(), this.loadCredentials()].map((p) => withTimeout(p, PAGE_WAIT_MS, 'OpenCode')));
+        return { ...this.providersPage(), loading: r.some((x) => x.status === 'rejected') || undefined };
+      }
       case 'opencode.models':
-        if (!this.b.allModels.length) await this.b.loadModels();
+        if (!this.b.allModels.length) await withTimeout(this.b.loadModels(), PAGE_WAIT_MS, 'OpenCode').catch(() => undefined);
         return this.modelsPage();
-      case 'opencode.mcp':
-        await this.loadMcp();
-        return this.mcpPage();
-      case 'opencode.cli':
-        await Promise.allSettled([this.b.refreshStatus(), this.loadJob()]);
-        return this.cliPage();
+      case 'opencode.mcp': {
+        const done = await this.mcp.ensure(PAGE_WAIT_MS);
+        return this.mcpPage(!done);
+      }
       default:
         return null;
     }
@@ -510,129 +542,101 @@ export class OpenCodeSettings implements AgentSettingsProvider {
 
   // --- MCP servers
 
-  private async loadMcp() {
-    try {
-      this.mcp = await this.b.client.mcpList();
-      this.mcpError = null;
-    } catch (e) {
-      this.mcpError = errMsg(e);
-      if (!this.mcp) this.mcp = [];
-    }
+  private async fetchMcp(): Promise<OpenCodeMcpServer[]> {
+    return this.b.client.mcpList();
   }
 
   /** Add / edit form (a saved server's name cannot change, as in the app). */
-  private mcpForm(srv?: OpenCodeMcpServer): SettingFormField[] {
+  private mcpFormFor(srv?: OpenCodeMcpServer): SettingFormField[] {
     const c = srv?.config ?? {};
     const local = str(c, 'type') === 'local';
-    const command = arr(c, 'command')
-      .map((x) => String(x))
-      .map((w) => (w.includes(' ') ? `"${w}"` : w))
-      .join(' ');
-    const pairs = (o: Json, sep: string) =>
-      Object.entries((o && typeof o === 'object' ? o : {}) as Record<string, unknown>)
-        .map(([k, v]) => `${k}${sep}${String(v)}`)
-        .join('\n');
-    return [
-      ...(srv ? [] : [{ id: 'name', label: 'Name', kind: 'text' as const, placeholder: 'github', required: true }]),
-      {
-        id: 'type',
-        label: 'Type',
-        kind: 'select',
-        value: srv ? (local ? 'local' : 'remote') : 'remote',
-        options: [
-          { value: 'remote', label: 'Remote (HTTP)' },
-          { value: 'local', label: 'Local (command)', description: "It runs on this machine, in OpenCode's environment" },
-        ],
-      },
-      { id: 'url', label: 'URL (remote)', kind: 'text', value: str(c, 'url') ?? '', placeholder: 'https://example.com/mcp' },
-      { id: 'headers', label: 'Headers (remote; one per line, Name: value)', kind: 'multiline', value: pairs(c.headers, ': ') },
-      { id: 'command', label: 'Command (local)', kind: 'text', value: command, placeholder: 'npx -y @modelcontextprotocol/server-filesystem ~/projects' },
-      { id: 'env', label: 'Environment (local; one per line, KEY=value)', kind: 'multiline', value: pairs(c.environment, '=') },
-    ];
+    const strs = (o: Json): Record<string, string> =>
+      Object.fromEntries(Object.entries((o && typeof o === 'object' ? o : {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
+    return mcpForm({
+      name: srv?.name ?? '',
+      nameLocked: !!srv,
+      remote: srv ? !local : false,
+      command: joinCommand(arr(c, 'command').map((x) => String(x))),
+      env: strs(c.environment),
+      url: str(c, 'url') ?? '',
+      headers: strs(c.headers),
+    });
   }
 
-  private mcpPage(): SettingsPage {
-    const servers = this.mcp ?? [];
-    const rows: SettingListRow[] = servers.map((srv) => {
+  private mcpViews(): McpServerView[] {
+    const views: McpServerView[] = (this.mcp.value ?? []).map((srv) => {
       const c = srv.config;
-      const where = c ? (str(c, 'url') ?? arr(c, 'command').map(String).join(' ')) : null;
-      const [label, tone] =
-        srv.status === 'connected'
-          ? ['Connected', 'ok']
+      const off = c?.enabled === false || srv.status === 'disabled';
+      const state: McpState = off
+        ? 'off'
+        : srv.status === 'connected'
+          ? 'connected'
           : srv.status === 'failed'
-            ? ['Failed', 'error']
-            : srv.status === 'disabled'
-              ? ['Disabled', 'muted']
-              : srv.status === 'needs_auth' || srv.status === 'needs_client_registration'
-                ? ['Needs sign-in', 'warn']
-                : srv.status === 'pending'
-                  ? ['Connecting…', 'warn']
-                  : srv.status == null
-                    ? ['Connects with the next chat', 'muted']
-                    : [srv.status, 'muted'];
+            ? 'error'
+            : srv.status === 'needs_auth' || srv.status === 'needs_client_registration'
+              ? 'auth'
+              : srv.status === 'pending'
+                ? 'connecting'
+                : 'idle';
       return {
-        id: srv.name,
-        title: srv.name,
-        subtitle: [where, srv.saved ? null : 'from your OpenCode config', srv.error].filter(Boolean).join(' · ') || null,
-        status: label,
-        statusTone: tone as SettingListRow['statusTone'],
-        actions: srv.saved
-          ? [
-              { id: 'edit', label: 'Edit', form: this.mcpForm(srv) },
-              { id: 'remove', label: 'Remove', danger: true, confirm: `Remove the MCP server "${srv.name}"?` },
-            ]
-          : [],
+        name: srv.name,
+        state,
+        where: c ? (str(c, 'url') ?? (arr(c, 'command').map(String).join(' ') || null)) : null,
+        origin: srv.saved ? (srv.status == null && !off ? 'connects with the next chat' : null) : 'from your OpenCode config',
+        error: srv.error,
+        // OpenCode's status has no tool list
+        tools: null,
+        // servers of the user's own OpenCode config are shown but changed there
+        enabled: srv.saved ? !off : null,
+        reconnect: true,
+        editForm: srv.saved ? this.mcpFormFor(srv) : null,
+        removable: srv.saved,
+        busy: this.busy.get(srv.name) ?? null,
       };
     });
-    const stitchAdded = servers.some((s) => s.name === STITCH.name);
-    const presets: SettingItem[] = [
-      {
-        kind: 'button',
-        id: 'preset.stitch',
-        label: stitchAdded ? 'Stitch · added' : 'Add Stitch',
-        description: 'Google Stitch UI design · needs an API key',
-        disabled: stitchAdded,
-        form: [{ id: 'key', label: 'Stitch API key (X-Goog-Api-Key)', kind: 'password', required: true }],
-      },
-    ];
-    const items: SettingItem[] = [];
-    if (this.mcpError) items.push({ kind: 'info', id: 'error', label: 'MCP servers', value: this.mcpError, tone: 'error' });
-    items.push(
-      {
-        kind: 'list',
-        id: 'servers',
-        label: `Servers (${servers.length})`,
-        description: 'Servers added here work in every OpenCode chat and survive restarts; they connect when a chat starts. Servers from your own OpenCode config are shown but changed there.',
-        rows,
-        emptyText: 'None yet. Add one with a preset or "Add server".',
-        addLabel: 'Add server',
-        addForm: this.mcpForm(),
-      },
-      { kind: 'button', id: 'refresh', label: 'Refresh' },
-    );
-    return {
-      id: 'opencode.mcp',
-      title: 'MCP servers',
-      sections: [
-        { id: 'presets', title: '', agent: 'OPENCODE', items: presets },
-        { id: 'servers', title: '', agent: 'OPENCODE', items },
-      ],
-    };
+    for (const [name, label] of this.busy) if (!views.some((v) => v.name === name)) views.unshift({ name, state: 'connecting', busy: label });
+    return views;
   }
 
-  private mcpConfig(v: Record<string, string>): { name: string; config: Record<string, unknown> } {
-    const name = (v.name ?? '').trim();
-    if (!MCP_NAME_RE.test(name)) throw new Error('The name may use letters, digits, - and _ (up to 64)');
-    if (v.type === 'local') {
-      const command = splitCommand(v.command ?? '');
-      if (!command.length) throw new Error('Enter the command');
-      const env = parsePairs(v.env, '=');
-      return { name, config: { type: 'local', command, ...(Object.keys(env).length ? { environment: env } : {}) } };
+  private mcpPage(loading = false): SettingsPage {
+    const servers = this.mcp.value ?? [];
+    return mcpPage({
+      id: 'opencode.mcp',
+      agent: 'OPENCODE',
+      description: 'Servers added here work in every OpenCode chat and survive restarts; they connect when a chat starts. Servers from your own OpenCode config are shown but changed there.',
+      servers: this.mcpViews(),
+      error: this.mcpError(),
+      addForm: this.mcpFormFor(),
+      loading,
+      presets: [presetsItem(servers.map((s: any) => ({ name: String(s.name), url: s.url ?? s.config?.url ?? null })), this.mcpFormFor())],
+    });
+  }
+
+  private mcpError(): string | null {
+    return this.mcp.error;
+  }
+
+  /** OpenCode's config entry from the form ({type:"local",command,environment} or {type:"remote",url,headers}); an
+   *  edit keeps the entry's other fields (enabled, timeout…). */
+  private mcpConfig(v: Record<string, string>, old?: Json | null): { name: string; config: Record<string, unknown> } {
+    const f = mcpFormValues(v);
+    if (!MCP_NAME_RE.test(f.name)) throw new Error('The name may use letters, digits, - and _ (up to 64)');
+    const { type: _t, url: _u, headers: _h, command: _c, environment: _e, ...rest } = (old && typeof old === 'object' ? old : {}) as Record<string, unknown>;
+    if (!f.remote) return { name: f.name, config: { ...rest, type: 'local', command: f.command, ...(Object.keys(f.env).length ? { environment: f.env } : {}) } };
+    return { name: f.name, config: { ...rest, type: 'remote', url: f.url, ...(Object.keys(f.headers).length ? { headers: f.headers } : {}) } };
+  }
+
+  /** Runs an MCP change with the row marked busy, then reads the list again. */
+  private async mcpChange<T>(name: string, label: string, run: () => Promise<T>): Promise<T> {
+    this.busy.set(name, label);
+    this.changed();
+    try {
+      return await run();
+    } finally {
+      this.busy.delete(name);
+      await this.mcp.reload(PAGE_WAIT_MS);
+      this.changed();
     }
-    const url = (v.url ?? '').trim();
-    if (!/^https?:\/\//.test(url)) throw new Error('Enter an http(s) URL');
-    const headers = parsePairs(v.headers, ':');
-    return { name, config: { type: 'remote', url, ...(Object.keys(headers).length ? { headers } : {}) } };
   }
 
   // --- Server & install
@@ -684,7 +688,8 @@ export class OpenCodeSettings implements AgentSettingsProvider {
         id: 'state',
         label: 'OpenCode',
         value: [STATE_LABELS[state], st.version, st.running ? 'server running' : null].filter(Boolean).join(' · '),
-        tone: state === 'ready' ? 'ok' : state === 'checking' ? 'warn' : 'error',
+        tone: state === 'ready' ? 'ok' : state === 'checking' ? 'muted' : state === 'not_installed' ? 'warn' : 'error',
+        description: state !== 'ready' && state !== 'checking' ? (this.b.status().detail ?? null) : null,
       },
       { kind: 'info', id: 'binary', label: 'Binary', value: st.binary || '—', tone: 'muted' },
       {
@@ -707,16 +712,29 @@ export class OpenCodeSettings implements AgentSettingsProvider {
         value: j.running ? 'running…' : j.exit_code === 0 ? 'done' : 'failed',
         tone: j.running ? 'warn' : j.exit_code === 0 ? 'ok' : 'error',
       });
-      if (j.log?.trim()) items.push({ kind: 'text', id: 'log', label: 'Log', value: j.log.trim().split('\n').slice(-14).join('\n'), multiline: true, disabled: true });
+      if (j.log?.trim()) items.push({ kind: 'text', id: 'log', label: 'Log', value: j.log.trim().split('\n').slice(-30).join('\n'), multiline: true, code: true, rows: 10, disabled: true });
     }
     if (state === 'ready') items.push(this.restartButton('restart'));
-    if (st.logs?.length) items.push({ kind: 'text', id: 'serverLog', label: 'Server log', value: st.logs.slice(-20).join('\n'), multiline: true, disabled: true });
-    return { id: 'opencode.cli', title: 'Server & install', sections: [{ id: 'cli', title: '', agent: 'OPENCODE', items }] };
+    items.push({ kind: 'button', id: 'check', label: 'Check again' });
+    const sections: SettingsSection[] = [{ id: 'cli', title: '', agent: 'OPENCODE', items }];
+    if (st.logs?.length)
+      sections.push({ id: 'logs', title: '', agent: 'OPENCODE', items: [{ kind: 'text', id: 'serverLog', label: 'Server log', value: st.logs.slice(-20).join('\n'), multiline: true, code: true, rows: 8, disabled: true }] });
+    sections.push({
+      id: 'account',
+      title: '',
+      agent: 'OPENCODE',
+      items: [{ kind: 'page', id: 'opencode.providers', label: 'Providers', icon: 'cloud', description: 'No sign-in for OpenCode itself: each provider uses its own account or API key (free models need none).' }],
+    });
+    return { id: 'opencode.cli', title: 'OpenCode CLI', sections };
   }
 
   // ------------------------------------------------------------------ edits
 
-  async change(page: string, id: string, value: unknown): Promise<void> {
+  async change(page: string, id: string, value: unknown, rowId?: string): Promise<void> {
+    if (page === 'opencode.mcp' && id === MCP_LIST && rowId) {
+      await this.setMcpEnabled(rowId, value === true);
+      return;
+    }
     if (page === 'opencode.permissions') {
       if (id === 'mode') await this.b.setPermissionMode(String(value), 'open');
       else if (id === 'agent') {
@@ -750,6 +768,11 @@ export class OpenCodeSettings implements AgentSettingsProvider {
     if (page === 'opencode.cli') {
       if (id === 'install' || id === 'update') return this.startJob(id);
       if (id === 'restart') return this.restart();
+      if (id === 'check') {
+        await Promise.allSettled([this.b.refreshStatus(), this.loadJob()]);
+        this.changed();
+        return STATE_LABELS[this.b.ocState];
+      }
       return;
     }
     if (page === 'opencode.models') {
@@ -765,6 +788,7 @@ export class OpenCodeSettings implements AgentSettingsProvider {
   }
 
   private async restart(): Promise<string> {
+    this.b.toast('Restarting OpenCode…', 'info');
     await this.b.client.restart();
     await this.b.refreshStatus();
     void this.b.loadModels();
@@ -780,41 +804,72 @@ export class OpenCodeSettings implements AgentSettingsProvider {
     return action === 'install' ? 'Installing OpenCode…' : 'Checking for updates…';
   }
 
+  private async addServer(values: Record<string, string>): Promise<string> {
+    const { name, config } = this.mcpConfig(values);
+    if ((this.mcp.value ?? []).some((s) => s.name === name)) throw new Error(`There is already a server named ${name}`);
+    await this.mcpChange(name, 'Saving…', () => this.b.client.putMcp(name, config));
+    return `${name} saved`;
+  }
+
+  /** A preset tile (the app's OpenCodeMcpPage presets): the bridge's PUT /mcp/<serverName> {type:'remote', url,
+   *  headers} or {type:'local', command:[cmd, ...args]}. */
+  private async addPreset(tileId: string, values?: Record<string, string>): Promise<string> {
+    await this.mcp.ensure(PAGE_WAIT_MS);
+    const tap = presetTap(tileId, values, (this.mcp.value ?? []).map((s: any) => ({ name: String(s.name), url: s.url ?? s.config?.url ?? null })));
+    if (tap.kind === 'done') return tap.message;
+    if (tap.kind === 'custom') {
+      if (!values) throw new Error('Fill in the server to add');
+      return this.addServer(values);
+    }
+    const p = tap.preset;
+    const headers = presetHeaders(p);
+    const config: Record<string, unknown> =
+      p.transport === 'stdio' ? { type: 'local', command: [p.command ?? '', ...(p.args ?? [])] } : { type: 'remote', url: p.url ?? '', ...(Object.keys(headers).length ? { headers } : {}) };
+    await this.mcpChange(p.serverName, 'Adding…', () => this.b.client.putMcp(p.serverName, config));
+    return `Added ${p.name}`;
+  }
+
+  /** OpenCode reloads its config: every MCP server reconnects. */
+  private async reconnectAll() {
+    await withTimeout(this.b.client.post('/location/reload'), 20_000, 'OpenCode');
+  }
+
   private async mcpAction(id: string, rowId?: string, actionId?: string, values?: Record<string, string>): Promise<string | void> {
-    const done = async (msg: string) => {
-      await this.loadMcp();
+    if (id === MCP_REFRESH_ALL || (id === MCP_LIST && actionId === MCP_RECONNECT)) {
+      if (this.b.ocState !== 'ready') throw new Error(blockedReason(this.b.status()) ?? 'OpenCode is not running');
+      // OpenCode has no per-server reconnect: reloading its config reconnects them all
+      await this.reconnectAll();
+      const done = await this.mcp.reload(PAGE_WAIT_MS);
       this.changed();
-      return msg;
-    };
-    if (id === 'refresh') {
-      await this.loadMcp();
-      this.changed();
-      return;
+      if (this.mcp.error) throw new Error(`Could not read the servers: ${this.mcp.error}`);
+      if (!done) return 'Reconnecting… the list updates when OpenCode answers';
+      const s = rowId ? (this.mcp.value ?? []).find((x) => x.name === rowId) : null;
+      if (s?.status === 'failed') throw new Error(`${rowId}: ${s.error ?? 'failed to connect'}`);
+      return rowId ? `Reconnected ${rowId}` : `${(this.mcp.value ?? []).length} servers reconnected`;
     }
-    if (id === 'preset.stitch' && values) {
-      const key = values.key?.trim();
-      if (!key) throw new Error('Enter the API key');
-      await this.b.client.putMcp(STITCH.name, { type: 'remote', url: STITCH.url, headers: { [STITCH.header]: key } });
-      return done(`${STITCH.name} saved`);
+    if (id === MCP_PRESETS && actionId) return this.addPreset(actionId, values);
+    if (id === MCP_LIST && actionId === 'add' && values) return this.addServer(values);
+    if (id !== MCP_LIST || !rowId) return;
+    const srv = (this.mcp.value ?? []).find((s) => s.name === rowId);
+    if (actionId === MCP_REMOVE) {
+      await this.mcpChange(rowId, 'Removing…', () => this.b.client.removeMcp(rowId));
+      return `${rowId} removed`;
     }
-    if (id !== 'servers') return;
-    if (actionId === 'add' && values) {
-      const { name, config } = this.mcpConfig(values);
-      if ((this.mcp ?? []).some((s) => s.name === name)) throw new Error(`There is already a server named ${name}`);
-      await this.b.client.putMcp(name, config);
-      return done(`${name} saved`);
-    }
-    if (!rowId) return;
-    if (actionId === 'remove') {
-      await this.b.client.removeMcp(rowId);
-      return done(`${rowId} removed`);
-    }
-    if (actionId === 'edit' && values) {
-      const { name, config } = this.mcpConfig({ ...values, name: rowId });
-      await this.b.client.putMcp(name, config);
-      return done(`${name} saved`);
+    if (actionId === MCP_EDIT && values) {
+      const { name, config } = this.mcpConfig({ ...values, name: rowId }, srv?.config);
+      await this.mcpChange(name, 'Saving…', () => this.b.client.putMcp(name, config));
+      return `${name} saved`;
     }
   }
+
+  /** The row's switch: `enabled: false` in the saved entry (OpenCode skips it), removed again to switch it on. */
+  private async setMcpEnabled(name: string, on: boolean) {
+    const srv = (this.mcp.value ?? []).find((s) => s.name === name);
+    if (!srv?.saved || !srv.config) throw new Error(`${name} is in your own OpenCode config: switch it there`);
+    const { enabled: _e, ...rest } = srv.config as Record<string, unknown>;
+    await this.mcpChange(name, on ? 'Turning on…' : 'Turning off…', () => this.b.client.putMcp(name, on ? rest : { ...rest, enabled: false }));
+  }
+
 
   private async providerAction(id: string, rowId?: string, actionId?: string, values?: Record<string, string>): Promise<string | void> {
     const after = async () => {
@@ -928,8 +983,9 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       await this.b.client.connectExternal(integ.id, m.id ?? '', ans);
       return done();
     }
+    this.b.toast(`Opening ${integ.name} sign-in…`, 'info');
     if (this.signIn && !this.signIn.error) await this.b.client.cancelOAuth(this.signIn.integrationId, this.signIn.id);
-    const a = attemptOf(await this.b.client.startOAuth(integ.id, m.id ?? '', ans));
+    const a = attemptOf(await withTimeout(this.b.client.startOAuth(integ.id, m.id ?? '', ans), 30_000, 'OpenCode'));
     if (!a) throw new Error('OpenCode did not start the sign-in');
     const code = userCode(a);
     this.signIn = { ...a, integrationId: integ.id, integrationName: integ.name, code, loopback: returnsToLoopback(a), error: null, startedAt: Date.now() };

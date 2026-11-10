@@ -26,6 +26,7 @@ import (
 	"gemini-server/pkg/config"
 	"gemini-server/pkg/handlers"
 	"gemini-server/pkg/hub"
+	"gemini-server/pkg/nativehost"
 	"gemini-server/pkg/opencode"
 	"gemini-server/pkg/plugins"
 	"gemini-server/pkg/runlog"
@@ -59,6 +60,8 @@ Flags:
   --no-agy-patch            Never patch the agy binary (desktop): the hub keeps the standard x-codeium-csrf-token header
   --agy-data-dir <name>     agy history folder under ~/.gemini (default antigravity-cli; antigravity, antigravity-ide)
   -d, --dir <path>          Custom workspace directory
+  --native-host [--socket <path>]
+                            Chrome native messaging host of the AntiGem browser extension (started by Chrome)
   -h, --help                Show help documentation`)
 }
 
@@ -134,6 +137,14 @@ func formatHumanCrash(p interface{}, rawStack []byte) (reason string, location s
 }
 
 func main() {
+	// Chrome native messaging host of the AntiGem browser extension: stdin/stdout belong to Chrome, so dispatch before
+	// anything else runs or prints
+	for _, a := range os.Args[1:] {
+		if a == "--native-host" {
+			os.Exit(nativehost.Run(nativehost.ParseArgs(os.Args[1:])))
+		}
+	}
+
 	cfg := config.LoadConfig()
 
 	var unpatchOnly bool

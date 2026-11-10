@@ -1267,3 +1267,18 @@
   resize: vertical;
   font-size: calc(13 * var(--sp));
 }
+.tool-open-sub {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--primary);
+  cursor: pointer;
+}
+.tool-open-sub:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}

@@ -1,0 +1,559 @@
+/* ui/jarvis/JarvisCommandCenter.kt + JarvisBot.kt (components/JarvisCommand.tsx, components/JarvisBot.tsx).
+   Sizes: 1dp = 1px; text = sp × var(--sp). Text without its own lineHeight inherits bodyLarge's 24sp line height and
+   0.5sp letter spacing (see base.css); both are set again here because the strip / card sit inside other blocks.
+   Borders are Modifier.border: drawn inside the bounds (inset shadow / overlay), never adding to the size. */
+
+:root {
+  /* ui/jarvis/JarvisOverlay.kt: the same in both themes */
+  --jv-cyan: #22d3ee;
+  --jv-violet: #8b5cf6;
+  --jv-green: #22c55e;
+  --jv-amber: #f59e0b;
+  --jv-danger: #ef4444;
+  --jv-orange: #f97316;
+  --jv-gray: #9ca3af;
+  /* clickable state layer (as .icon-btn) */
+  --jv-hover: color-mix(in srgb, var(--on-surface) 8%, transparent);
+  --jv-press: color-mix(in srgb, var(--on-surface) 12%, transparent);
+}
+
+.jv-strip-wrap,
+.jv-ev-wrap,
+.jv-welcome {
+  font-weight: 400;
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+  color: var(--on-surface);
+}
+.jv-strip-wrap button,
+.jv-welcome button {
+  line-height: calc(24 * var(--sp));
+  letter-spacing: calc(0.5 * var(--sp));
+}
+
+/* ------------------------------------------------------------------ bot */
+
+.jv-bot {
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+.jv-badge {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.jv-badge-glass {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.jv-badge .jv-bot {
+  position: relative;
+}
+
+/* ------------------------------------------------------------------ animateContentSize() */
+
+.jv-size {
+  overflow: hidden;
+  transition: height var(--spring-ml-dur) var(--spring-ml);
+}
+
+/* ------------------------------------------------------------------ PulseDot (10dp; halo r = 7.5dp × 0.85…1.25) */
+
+.jv-dot {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+}
+.jv-dot-core,
+.jv-dot-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background: var(--c);
+}
+.jv-dot-core {
+  width: 6.25px;
+  height: 6.25px;
+  margin: -3.125px 0 0 -3.125px;
+  opacity: 0.6;
+}
+.jv-dot-halo {
+  width: 15px;
+  height: 15px;
+  margin: -7.5px 0 0 -7.5px;
+  opacity: 0.098;
+  transform: scale(0.85);
+  animation: jv-halo 700ms var(--fast-out-slow-in) infinite alternate;
+}
+.jv-dot.working .jv-dot-core {
+  opacity: 0.35;
+  animation: jv-core 700ms var(--fast-out-slow-in) infinite alternate;
+}
+@keyframes jv-core {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes jv-halo {
+  from {
+    opacity: 0.098;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 0.28;
+    transform: scale(1.25);
+  }
+}
+
+/* ------------------------------------------------------------------ the command strip */
+
+.jv-strip-wrap {
+  padding: 4px 10px;
+  user-select: none;
+}
+.jv-strip {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--jv-cyan) 7%, transparent);
+}
+.jv-strip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid color-mix(in srgb, var(--jv-cyan) 26%, transparent);
+  pointer-events: none;
+}
+
+.jv-head {
+  display: flex;
+  align-items: center;
+  padding: 8px 6px 4px 10px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms;
+}
+.jv-head:hover,
+.jv-head:focus-visible {
+  background: var(--jv-hover);
+}
+.jv-head:active {
+  background: var(--jv-press);
+}
+.jv-head-texts {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: 9px;
+}
+.jv-title,
+.jv-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jv-title {
+  font-size: calc(13 * var(--sp));
+  font-weight: 600;
+  color: var(--on-surface);
+}
+.jv-sub {
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.jv-count {
+  flex-shrink: 0;
+  margin-right: 2px;
+  font-size: calc(12 * var(--sp));
+  font-weight: 600;
+  color: var(--jv-cyan);
+  white-space: nowrap;
+}
+
+.jv-progress {
+  height: 3px;
+  margin: 0 12px 4px;
+  border-radius: 1.5px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+.jv-progress-fill {
+  height: 100%;
+  border-radius: 1.5px;
+}
+
+.jv-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.jv-chips::-webkit-scrollbar {
+  display: none;
+}
+
+/* ToggleChip: 13dp icon, 4dp, 11sp medium; on = cyan 14 % fill, cyan 60 % border */
+.jv-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background-color: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-surface) 30%, transparent);
+  color: color-mix(in srgb, var(--on-surface) 55%, transparent);
+  font-size: calc(11 * var(--sp));
+  font-weight: 500;
+  white-space: nowrap;
+}
+.jv-toggle-icon {
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+.jv-toggle.on {
+  background-color: color-mix(in srgb, var(--jv-cyan) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jv-cyan) 60%, transparent);
+  color: var(--on-surface);
+}
+.jv-toggle.on .jv-toggle-icon {
+  color: var(--jv-cyan);
+}
+
+/* TaskPill: the task's color at 12 % / 40 %, PulseDot, 3dp, "team · title" */
+.jv-pill {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  background-color: color-mix(in srgb, var(--c) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 40%, transparent);
+}
+.jv-pill-text {
+  margin-left: 3px;
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 85%, transparent);
+  white-space: nowrap;
+}
+.jv-finished {
+  flex-shrink: 0;
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+  white-space: nowrap;
+}
+
+/* the tools-missing hint */
+.jv-hint {
+  margin: 0 10px 8px 12px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background-color: color-mix(in srgb, var(--jv-amber) 12%, transparent);
+  font-size: calc(11.5 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 85%, transparent);
+  cursor: pointer;
+  outline: none;
+}
+
+/* the state layer of the tinted clickables (drawn over their fill, under their border) */
+.jv-toggle:hover,
+.jv-pill:hover,
+.jv-hint:hover,
+.jv-hint:focus-visible,
+.jv-small-action:hover,
+.jv-starter:hover,
+.jv-ev.clickable:hover,
+.jv-ev.clickable:focus-visible {
+  background-image: linear-gradient(var(--jv-hover), var(--jv-hover));
+}
+.jv-toggle:active,
+.jv-pill:active,
+.jv-hint:active,
+.jv-small-action:active,
+.jv-starter:active,
+.jv-ev.clickable:active {
+  background-image: linear-gradient(var(--jv-press), var(--jv-press));
+}
+
+/* ------------------------------------------------------------------ the board */
+
+.jv-board {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 0 12px 10px;
+}
+.jv-board-title {
+  padding: 10px 0 2px;
+  font-size: calc(10.5 * var(--sp));
+  font-weight: 600;
+  letter-spacing: calc(1.1 * var(--sp));
+  color: color-mix(in srgb, var(--jv-cyan) 90%, transparent);
+}
+.jv-board-empty {
+  font-size: calc(12 * var(--sp));
+  line-height: calc(17 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.jv-done-when {
+  font-size: calc(12 * var(--sp));
+  line-height: calc(16 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 70%, transparent);
+}
+.jv-step {
+  display: flex;
+  align-items: flex-start;
+  padding-top: 4px;
+}
+.jv-step-mark {
+  flex-shrink: 0;
+  width: 16px;
+  font-size: calc(12 * var(--sp));
+  font-weight: 700;
+}
+.jv-step-body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.jv-step-text {
+  font-size: calc(12.5 * var(--sp));
+  line-height: calc(17 * var(--sp));
+}
+.jv-step-note {
+  font-size: calc(11 * var(--sp));
+  line-height: calc(15 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+.jv-notes {
+  padding-top: 6px;
+  font-size: calc(11.5 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.jv-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 8px;
+}
+.jv-small-action {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 40%, transparent);
+  font-size: calc(11.5 * var(--sp));
+  font-weight: 500;
+  color: var(--c);
+  white-space: nowrap;
+}
+
+.jv-team {
+  display: flex;
+  align-items: center;
+  padding-top: 4px;
+}
+.jv-team-body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.jv-team-name {
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 500;
+  color: var(--on-surface);
+}
+.jv-team-role {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 55%, transparent);
+}
+.jv-team-running {
+  flex-shrink: 0;
+  font-size: calc(11 * var(--sp));
+  color: var(--jv-violet);
+  white-space: nowrap;
+}
+
+.jv-none {
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+.jv-task {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+  padding: 4px 0;
+  border-radius: 10px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms;
+}
+.jv-task:hover,
+.jv-task:focus-visible {
+  background: var(--jv-hover);
+}
+.jv-task:active {
+  background: var(--jv-press);
+}
+.jv-task-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+}
+.jv-task-body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.jv-task-title,
+.jv-task-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jv-task-title {
+  font-size: calc(12.5 * var(--sp));
+  color: var(--on-surface);
+}
+.jv-task-meta {
+  font-size: calc(10.5 * var(--sp));
+}
+
+/* ------------------------------------------------------------------ the event card */
+
+.jv-ev-wrap {
+  padding: 6px 16px;
+  user-select: none;
+}
+.jv-ev {
+  position: relative;
+  padding: 9px 12px;
+  border-radius: 14px;
+  overflow: hidden;
+  background-color: color-mix(in srgb, var(--jv-cyan) 5%, transparent);
+  outline: none;
+}
+.jv-ev::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid color-mix(in srgb, var(--jv-cyan) 20%, transparent);
+  pointer-events: none;
+}
+.jv-ev.clickable {
+  cursor: pointer;
+}
+.jv-ev-head {
+  display: flex;
+  align-items: center;
+}
+.jv-ev-head-title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: 7px;
+  font-size: calc(12 * var(--sp));
+  font-weight: 600;
+  color: var(--jv-cyan);
+}
+.jv-ev-toggle {
+  flex-shrink: 0;
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+  white-space: nowrap;
+}
+.jv-ev-row {
+  display: flex;
+  align-items: flex-start;
+  padding-top: 7px;
+}
+.jv-ev-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin: 5px 8px 0 0;
+  border-radius: 50%;
+}
+.jv-ev-body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.jv-ev-title {
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 500;
+  color: var(--on-surface);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jv-ev-word {
+  font-size: calc(11 * var(--sp));
+}
+/* SelectionContainer { Text(widthIn(max = 640.dp)) } */
+.jv-ev-text {
+  max-width: 640px;
+  padding-top: 4px;
+  font-size: calc(12 * var(--sp));
+  line-height: calc(17 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 78%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}
+
+/* ------------------------------------------------------------------ a fresh Jarvis chat */
+
+.jv-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 520px;
+  user-select: none;
+}
+.jv-welcome-title {
+  margin-top: 14px;
+  font-size: calc(21 * var(--sp));
+  font-weight: 600;
+  color: var(--on-surface);
+  text-align: center;
+}
+.jv-welcome-desc {
+  margin: 6px 0 16px;
+  font-size: calc(13.5 * var(--sp));
+  line-height: calc(19 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+  text-align: center;
+}
+.jv-starter {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background-color: color-mix(in srgb, var(--jv-cyan) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--jv-cyan) 22%, transparent);
+  font-size: calc(12.5 * var(--sp));
+  line-height: calc(17 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 85%, transparent);
+  text-align: left;
+  white-space: normal;
+}
+.jv-welcome .jv-starter {
+  line-height: calc(17 * var(--sp));
+}

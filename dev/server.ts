@@ -7,6 +7,17 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { AppHost, type Platform } from '../src/core/host';
 import { BridgeManager, cliPathArgs } from '../src/core/bridge/BridgeManager';
+import { McpHost } from '../src/core/mcp/server';
+import { NotesStore, notesMcp } from '../src/core/mcp/notes';
+import { themeMcp } from '../src/core/mcp/theme';
+import { setPresetEnv } from '../src/core/mcp/presets';
+import { JarvisEngine } from '../src/core/jarvis/engine';
+import { jarvisMcp } from '../src/core/jarvis/mcp';
+import { BrowserBridge } from '../src/core/browser/bridge';
+import { browserMcp } from '../src/core/browser/mcp';
+import { BrowserSettings } from '../src/core/browser/settings';
+import { chromeExtensionBrowser, setupPlugins } from '../src/core/plugins';
+import { randomBytes } from 'node:crypto';
 import { AgyBackend } from '../src/core/agy/AgyBackend';
 import { CodexBackend } from '../src/core/codex/CodexBackend';
 import { ClaudeBackend } from '../src/core/claude/ClaudeBackend';
@@ -80,13 +91,33 @@ const platform: Platform = {
   openInEditor: (id) => log(`[dev] openInEditor ${id}`),
   confirm: async () => true,
   prompt: async (_m, v) => v,
+  powerOff: async () => {
+    await bridge.powerOff();
+  },
+  powerOn: () => bridge.resume(),
+  isOff: () => bridge.suspended,
   restartBridge: async () => {
+    bridge.resume();
     await bridge.shutdown();
     await new Promise((r) => setTimeout(r, 800));
     await bridge.ensureRunning();
   },
   bridgeInfo: () => ({ port: bridge.opts.port, hubPort: bridge.opts.hubPort, logFile: bridge.opts.logFile }),
   pickFolder: async () => null,
+  // dev: the file a test wants picked (ANTIGEM_DEV_PICK_FILE: the path, or a .txt holding it), the first button of a
+  // choice, notifications in the log
+  pickFile: async () => {
+    const f = process.env.ANTIGEM_DEV_PICK_FILE;
+    if (!f) return null;
+    const picked = f.endsWith('.txt') ? (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim() : '') : f;
+    log(`[dev] pickFile → ${picked || '(cancelled)'}`);
+    return picked || null;
+  },
+  choose: async (m, options) => {
+    log(`[dev] choose "${m.split('\n')[0]}" → ${options[0]}`);
+    return options[0];
+  },
+  notify: (m) => log(`[dev] notify ${m}`),
   cliStatus: async () => {
     const get = (p: string) => bridge.json<any>(p).catch(() => null);
     const [agy, claude, codex, opencode] = await Promise.all([get('/api/agy/cli'), get('/api/claude/status'), get('/api/codex/status'), get('/api/opencode/status')]);
@@ -128,6 +159,46 @@ const host = new AppHost(
   log,
   kv,
 );
+// built-in MCP servers (same as the extension; the first process on the port serves them)
+let deviceId = kv.get<string>('mcp.deviceId');
+if (!deviceId) {
+  deviceId = randomBytes(16).toString('hex');
+  kv.set('mcp.deviceId', deviceId);
+}
+const mcp = new McpHost({ port: Number(process.env.ANTIGEM_MCP_PORT ?? 1246), deviceId, log });
+const notes = new NotesStore();
+host.attachNotes(notes);
+mcp.register(notesMcp(notes));
+mcp.register(themeMcp({ get: () => host.getUiPrefs(), set: (p) => host.patchUiPrefs(p) }));
+// Jarvis (the command center): the engine runs its loops only in the process that serves the MCP port
+const jarvis = new JarvisEngine({ host: host.jarvisApi(), store: kv, log, bridge, mcp });
+host.attachJarvis(jarvis);
+mcp.register(jarvisMcp(jarvis));
+const plugins = setupPlugins(host, { bridge, store: kv, log, mcp, platform });
+// the AntiGem Chrome extension link (socket path: ANTIGEM_BROWSER_SOCKET, else the per-user default)
+const browserBridge = new BrowserBridge({ log });
+// plugins' chrome.* APIs act on Chrome through the same extension link
+plugins.setBrowser(chromeExtensionBrowser(browserBridge));
+mcp.register(browserMcp(browserBridge, { workspace: () => workspace }));
+host.attachBrowser(
+  new BrowserSettings({
+    bridge: browserBridge,
+    binPath: bridge.opts.binPath,
+    // the Chrome extension's own repository next to this one (edits show without a build)
+    extensionDir: process.env.ANTIGEM_CHROME_EXTENSION ?? path.join(ROOT, '..', 'antigem-chrome-extension'),
+    openFolder: (p) => log(`[dev] openFolder ${p}`),
+    copy: platform.copy,
+    log,
+    mcpPort: mcp.port,
+  }),
+);
+setPresetEnv({ port: mcp.port, deviceId, served: (p) => mcp.serves(p) });
+void mcp.start().then((bound) => {
+  jarvis.setLeader(bound);
+  plugins.setLeader(bound);
+  if (bound) void browserBridge.start();
+});
+
 const port = Number(process.env.ANTIGEM_DEV_PORT ?? 5199);
 const wss = new WebSocketServer({ host: '127.0.0.1', port });
 wss.on('connection', (ws) => {
@@ -137,6 +208,7 @@ wss.on('connection', (ws) => {
 });
 log(`[dev] host on ws://127.0.0.1:${port}, workspace ${workspace}`);
 process.on('SIGINT', () => {
+  browserBridge.stop();
   host.dispose();
   process.exit(0);
 });

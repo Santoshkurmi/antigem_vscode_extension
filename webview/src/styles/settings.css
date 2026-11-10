@@ -561,12 +561,17 @@
   gap: 6px;
   flex-wrap: wrap;
 }
+/* two lines, like the app's row descriptions (store rows: maxLines = 2) */
 .list-row-sub {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   max-width: 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .badge {
   border-radius: 4px;
@@ -1154,4 +1159,156 @@
 .settings-section > .setting-item > .item-label {
   padding: 0 4px;
   margin-bottom: 4px;
+}
+
+/* an action waiting for the host's settingDone ("Signing in…") */
+.filled-btn.busy,
+.outlined-btn.busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.85;
+  cursor: progress;
+}
+.busy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: calc(12.5 * var(--sp));
+  font-weight: 500;
+  color: var(--primary);
+}
+.list-row.busy .list-row-title {
+  opacity: 0.75;
+}
+
+/* a page the host could not build, or that never came */
+.settings-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 24px;
+  text-align: center;
+  color: color-mix(in srgb, var(--danger) 85%, transparent);
+}
+.settings-error-title {
+  font-size: calc(16 * var(--sp));
+  font-weight: 700;
+  color: var(--on-surface);
+}
+.settings-error-text {
+  max-width: 320px;
+  margin-bottom: 8px;
+  font-size: calc(13 * var(--sp));
+  line-height: calc(19 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 70%, transparent);
+  white-space: pre-wrap;
+}
+.settings-error .filled-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* a config file editor (settings.json): monospace, many rows, no wrapping */
+.text-item-row.code {
+  flex-direction: column;
+  align-items: stretch;
+}
+.outlined-field.code {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: calc(12.5 * var(--sp));
+  line-height: calc(18 * var(--sp));
+  letter-spacing: 0;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+  resize: vertical;
+  background: var(--code-bg);
+  color: var(--code-text);
+}
+.text-item-row.code .filled-btn {
+  align-self: flex-end;
+}
+
+/* ---- MCP preset tiles (SettingsDialog.kt McpPresetTile): two a row */
+.preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.preset-tile {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--on-surface) 8%, transparent);
+  background: color-mix(in srgb, var(--surface-variant) 45%, transparent);
+  color: var(--on-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.preset-tile.added {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.preset-tile:not(:disabled):hover {
+  background: color-mix(in srgb, var(--surface-variant) 65%, transparent);
+}
+.preset-tile:disabled {
+  cursor: default;
+}
+.preset-tile:disabled:not(.busy) {
+  opacity: 0.5;
+}
+.preset-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.preset-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.preset-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.preset-name {
+  min-width: 0;
+  font-size: calc(12.5 * var(--sp));
+  line-height: calc(18 * var(--sp));
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preset-check {
+  flex-shrink: 0;
+  color: var(--success);
+}
+.preset-sub {
+  font-size: calc(10.5 * var(--sp));
+  line-height: calc(13 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 55%, transparent);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

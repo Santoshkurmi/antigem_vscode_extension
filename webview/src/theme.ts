@@ -4,7 +4,8 @@
 //
 // Shared view prefs (UiPrefs) from the host:  theme: 'auto' | 'light' | 'dark' | <theme id>,  lightTheme / darkTheme:
 // theme ids, customThemes: CustomThemeJson[]. Before the first uiPrefs arrive the defaults apply from the stylesheet.
-import { createMemo, createRoot, createSignal } from 'solid-js';
+import { createEffect, createMemo, createRoot, createSignal, on } from 'solid-js';
+import { host } from './host';
 import type { UiPrefs } from '@shared/protocol';
 import { BUILT_IN, cssVars, customFromJson, DARK_DEFAULT, LIGHT_DEFAULT, type AppTheme, type CustomThemeJson } from './themes';
 
@@ -102,6 +103,13 @@ export function initTheme() {
       uiPrefs();
       apply();
     });
+    // the side on screen now (theme_mcp's "on screen now" in auto mode): told to the host whenever it changes
+    createEffect(
+      on(state.side, (side) => {
+        if ((uiPrefs() as { screenSide?: string } | null)?.screenSide === side) return;
+        host.send({ type: 'setUiPref', key: 'screenSide', value: side });
+      }),
+    );
   });
   const update = () => setSystemSide(detectSystem());
   new MutationObserver(update).observe(document.body, { attributes: true, attributeFilter: ['class'] });

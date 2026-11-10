@@ -45,6 +45,8 @@ type SessionSummary struct {
 	Busy       bool   `json:"busy"`
 	SizeBytes  int64  `json:"size_bytes"`
 	Archived   bool   `json:"archived"`
+	// Subagent runs of the session (Agent/Task tool), oldest first; omitted when there are none.
+	Subagents []SubagentSummary `json:"subagents,omitempty"`
 }
 
 type transcriptLine struct {
@@ -88,6 +90,7 @@ func (m *Manager) ListSessions() []SessionSummary {
 			sum.CreatedAt = sum.UpdatedAt
 		}
 		sum.SizeBytes = fi.Size()
+		sum.Subagents = listSubagents(f)
 		_, sum.Archived = archived[sum.ID]
 		if st, ok := live[sum.ID]; ok {
 			sum.Live = st.Live
@@ -294,6 +297,12 @@ func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMes
 	if path == "" {
 		return []json.RawMessage{}, nil
 	}
+	return chainEntries(path, maxBytes, cut, false)
+}
+
+// chainEntries reads a transcript's message chain (see History). sidechain: the file is a subagent's transcript,
+// whose lines are all `isSidechain: true`; otherwise sidechain lines are skipped.
+func chainEntries(path string, maxBytes int64, cut *string, sidechain bool) ([]json.RawMessage, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -318,7 +327,7 @@ func (m *Manager) History(id string, maxBytes int64, cut *string) ([]json.RawMes
 			continue
 		}
 		var l transcriptLine
-		if json.Unmarshal(b, &l) != nil || l.UUID == "" || l.IsSidechain {
+		if json.Unmarshal(b, &l) != nil || l.UUID == "" || l.IsSidechain != sidechain {
 			continue
 		}
 		// every uuid line is part of the parent chain (attachments, progress, …); only messages are returned

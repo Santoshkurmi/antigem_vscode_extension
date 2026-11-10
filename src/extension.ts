@@ -8,6 +8,16 @@ import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { AppHost, type Platform, type ViewPort } from './core/host';
 import { BridgeManager, cliPathArgs } from './core/bridge/BridgeManager';
+import { McpHost } from './core/mcp/server';
+import { NotesStore, notesMcp } from './core/mcp/notes';
+import { themeMcp } from './core/mcp/theme';
+import { setPresetEnv } from './core/mcp/presets';
+import { JarvisEngine } from './core/jarvis/engine';
+import { jarvisMcp } from './core/jarvis/mcp';
+import { BrowserBridge } from './core/browser/bridge';
+import { browserMcp } from './core/browser/mcp';
+import { BrowserSettings } from './core/browser/settings';
+import { chromeExtensionBrowser, setupPlugins } from './core/plugins';
 import { AgyBackend } from './core/agy/AgyBackend';
 import { CodexBackend } from './core/codex/CodexBackend';
 import { ClaudeBackend } from './core/claude/ClaudeBackend';
@@ -209,7 +219,13 @@ export function activate(context: vscode.ExtensionContext) {
     openInEditor: (id) => openChatPanel(context, id),
     confirm: async (m) => (await vscode.window.showWarningMessage(m, { modal: true }, 'Delete')) === 'Delete',
     prompt: (m, v) => Promise.resolve(vscode.window.showInputBox({ prompt: m, value: v })),
+    powerOff: async () => {
+      await bridge.powerOff();
+    },
+    powerOn: () => bridge.resume(),
+    isOff: () => bridge.suspended,
     restartBridge: async () => {
+      bridge.resume();
       await bridge.shutdown();
       await new Promise((r) => setTimeout(r, 800));
       await bridge.ensureRunning();
@@ -255,6 +271,22 @@ export function activate(context: vscode.ExtensionContext) {
     revealRange: (p, a, b) => {
       void vscode.window.showTextDocument(vscode.Uri.file(p), { selection: new vscode.Range(Math.max(0, a - 1), 0, Math.max(0, b - 1), Number.MAX_SAFE_INTEGER) });
     },
+    pickFile: async (o) => {
+      const r = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: false, title: o.title, filters: o.filters, openLabel: 'Choose' });
+      return r?.[0]?.fsPath ?? null;
+    },
+    choose: async (m, options) => {
+      const [first, ...rest] = m.split('\n');
+      return vscode.window.showInformationMessage(first, { modal: true, detail: rest.join('\n') || undefined }, ...options);
+    },
+    notify: (m, action) => {
+      void vscode.window.showInformationMessage(m, ...(action ? [action.label] : [])).then((picked) => {
+        if (picked && action) {
+          void vscode.commands.executeCommand('antigem.chat.focus');
+          action.run();
+        }
+      });
+    },
     pickFolder: async () => {
       const r = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: 'Use this folder' });
       return r?.[0]?.fsPath ?? null;
@@ -280,6 +312,47 @@ export function activate(context: vscode.ExtensionContext) {
     log,
     kv,
   );
+
+
+  // ---- built-in MCP servers (notes, theme…) — the app's local bridge server, one path per server
+  let deviceId = kv.get<string>('mcp.deviceId');
+  if (!deviceId) {
+    deviceId = randomBytes(16).toString('hex');
+    kv.set('mcp.deviceId', deviceId);
+  }
+  const mcp = new McpHost({ port: cfg().get<number>('mcpPort', 1246), deviceId, log });
+  const notes = new NotesStore();
+  host.attachNotes(notes);
+  mcp.register(notesMcp(notes));
+  mcp.register(themeMcp({ get: () => host!.getUiPrefs(), set: (p) => host!.patchUiPrefs(p) }));
+  // Jarvis (the command center): the engine runs its loops only in the process that serves the MCP port
+  const jarvis = new JarvisEngine({ host: host.jarvisApi(), store: kv, log, bridge, mcp });
+  host.attachJarvis(jarvis);
+  mcp.register(jarvisMcp(jarvis));
+  // custom AntiGem plugins: /mcp?extension=<id>, /extension_developer, settings, `/plu:` (workers run in the port owner)
+  const plugins = setupPlugins(host, { bridge, store: kv, log, mcp, platform });
+  // the AntiGem Chrome extension (native messaging -> per-user socket, served by the MCP port owner): /browser + Settings → Browser
+  const browserBridge = new BrowserBridge({ log });
+  // plugins' chrome.* APIs act on Chrome through the same extension link
+  plugins.setBrowser(chromeExtensionBrowser(browserBridge));
+  mcp.register(browserMcp(browserBridge, { workspace: homeDir }));
+  host.attachBrowser(
+    new BrowserSettings({
+      bridge: browserBridge,
+      binPath: bridge.opts.binPath,
+      extensionDir: path.join(context.extensionPath, 'dist', 'chrome-extension'),
+      openFolder: (p) => void vscode.env.openExternal(vscode.Uri.file(p)),
+      copy: platform.copy,
+      log,
+      mcpPort: mcp.port,
+    }),
+  );
+  setPresetEnv({ port: mcp.port, deviceId, served: (p) => mcp.serves(p) });
+  void mcp.start().then((bound) => {
+    jarvis.setLeader(bound);
+    plugins.setLeader(bound);
+    if (bound) void browserBridge.start();
+  });
 
   // ---- editor → composer: the active file / selection, debounced
   let ctxTimer: NodeJS.Timeout | undefined;
@@ -354,6 +427,8 @@ export function activate(context: vscode.ExtensionContext) {
       await bridge.ensureRunning().catch((e) => log(`[bridge] ${e instanceof Error ? e.message : String(e)}`));
     }),
     vscode.commands.registerCommand('antigem.showLogs', () => output.show()),
+    { dispose: () => mcp.stop() },
+    { dispose: () => browserBridge.stop() },
     { dispose: () => host?.dispose() },
   );
   log('[antigem] activated');

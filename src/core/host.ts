@@ -6,6 +6,10 @@ import type { AgentKind, ChatAttachment, ChatMessage, Conversation } from '../..
 import type { ChatPatch, ChatSearchHit, EditorContextView, FileSuggestion, HostToView, ProjectView, SettingItem, SettingsPage, SettingsSection, UiPrefs, ViewToHost, WorkspaceFolder } from '../../shared/protocol';
 import path from 'node:path';
 import { HostSettings } from './settings';
+import type { NotesStore } from './mcp/notes';
+import type { JarvisHooks, JarvisHostApi } from './jarvis/types';
+import type { BrowserHooks } from './browser/settings';
+import type { PluginHooks } from './plugins/types';
 import { selectionBlock } from './text';
 import type { AgentBackend, ChatState, KeyValueStore, Logger } from './types';
 
@@ -33,6 +37,10 @@ export interface Platform {
   prompt(message: string, value: string): Promise<string | undefined>;
   /** Stops and starts the bridge again (its hub too). */
   restartBridge(): Promise<void>;
+  /** Drawer ⏻: stop the bridge + agents and keep them off; powerOn() allows starting again. */
+  powerOff(): Promise<void>;
+  powerOn(): void;
+  isOff(): boolean;
   /** Shows the host log (VS Code output channel); absent in dev. */
   showLogs?(): void;
   bridgeInfo(): { port: number; hubPort: number; logFile: string };
@@ -46,6 +54,12 @@ export interface Platform {
   cliStatus(): Promise<Partial<Record<AgentKind, { installed: boolean; path: string; version: string }>>>;
   /** "Save a copy" of a file the agent produced (artifact download). */
   saveCopy(path: string): Promise<void>;
+  /** File chooser (absolute path, or null when cancelled); `filters` = label → extensions. */
+  pickFile?(opts: { title?: string; filters?: Record<string, string[]> }): Promise<string | null>;
+  /** A modal choice between buttons: the picked label, undefined when cancelled. */
+  choose?(message: string, options: string[]): Promise<string | undefined>;
+  /** A system notification (VS Code toast), optionally with one action button. */
+  notify?(message: string, action?: { label: string; run: () => void }): void;
 }
 
 export interface ViewPort {
@@ -70,7 +84,7 @@ interface ViewState {
   settingsPage: string | null;
 }
 
-const META_KEYS = ['conversation', 'isStreaming', 'isLoading', 'error', 'queued', 'approvals', 'question', 'artifacts', 'workingLabel', 'controls', 'notice', 'modelId'] as const;
+const META_KEYS = ['conversation', 'isStreaming', 'isLoading', 'error', 'queued', 'approvals', 'question', 'artifacts', 'workingLabel', 'controls', 'notice', 'modelId', 'readOnly'] as const;
 
 export class AppHost {
   private views = new Map<string, ViewState>();
@@ -112,6 +126,115 @@ export class AppHost {
   /** Sends a message to every view. */
   broadcastAll(msg: HostToView) {
     this.broadcast(msg);
+  }
+
+  // ------------------------------------------------------------------ shared prefs (theme MCP) and notes
+
+  getUiPrefs(): Record<string, unknown> {
+    return this.uiPrefs() as Record<string, unknown>;
+  }
+
+  /** Changes shared view prefs and re-themes every view (theme_mcp, settings). */
+  patchUiPrefs(patch: Record<string, unknown>) {
+    const prefs = { ...this.uiPrefs(), ...patch } as UiPrefs;
+    this.store.set('ui.prefs', prefs);
+    this.broadcast({ type: 'uiPrefs', prefs });
+  }
+
+  private notes: NotesStore | null = null;
+
+  /** The notes store the Notes screen and notes_mcp share; every change reaches open views. */
+  attachNotes(store: NotesStore) {
+    this.notes = store;
+    store.onChange((all) => this.broadcast({ type: 'notes', notes: all }));
+  }
+
+  // ------------------------------------------------------------------ Jarvis (src/core/jarvis): hooks both ways
+
+  private jarvis: JarvisHooks | null = null;
+
+  // ------------------------------------------------------------------ AntiGem browser extension (src/core/browser)
+
+  private browser: BrowserHooks | null = null;
+
+  /** Settings → Browser (pages 'browser*'); its status changes refresh the pages that show it. */
+  attachBrowser(b: BrowserHooks) {
+    this.browser = b;
+    b.onChange(() => {
+      for (const v of this.views.values()) if (v.settingsPage === 'root' || v.settingsPage?.startsWith('browser')) void this.postSettings(v);
+    });
+  }
+
+  // ------------------------------------------------------------------ custom AntiGem plugins (src/core/plugins)
+
+  private plugins: PluginHooks | null = null;
+
+  /** Custom plugins: `/plu:` items and expansion, Settings → Custom AntiGem Plugins. */
+  attachPlugins(p: PluginHooks) {
+    this.plugins = p;
+    this.settings.pluginGuide = (id, skill) => p.guide(id, skill);
+    p.bind({
+      broadcast: (msg) => this.broadcast(msg),
+      // only the pages that show plugins (install progress ticks must not rebuild an agent's page)
+      refreshSettings: () => {
+        for (const v of this.views.values()) if (v.settingsPage === 'root' || v.settingsPage === 'plugins' || v.settingsPage?.startsWith('plugins.')) void this.postSettings(v);
+      },
+      refreshCommands: () => {
+        for (const b of this.active()) this.broadcast({ type: 'commands', agent: b.kind, commands: this.commandsFor(b.kind) });
+      },
+      openSettings: (page) => {
+        const id = this.activeViewId();
+        if (id) this.views.get(id)?.port.post({ type: 'jarvisNavigate', screen: 'settings', settingsPage: page });
+      },
+    });
+  }
+
+  /** The Jarvis engine: wraps sends to Jarvis chats, tags the chat list, owns the 'jarvis' settings pages. */
+  attachJarvis(j: JarvisHooks) {
+    this.jarvis = j;
+    this.broadcast({ type: 'jarvis', state: j.snapshot(), full: true });
+    this.broadcast({ type: 'conversations', conversations: this.allConversations() });
+  }
+
+  /** What the Jarvis engine may use of the host. */
+  jarvisApi(): JarvisHostApi {
+    const lastView = () => {
+      const id = this.activeViewId();
+      return id ? (this.views.get(id) ?? null) : null;
+    };
+    return {
+      backend: (k) => this.backendFor(k),
+      enabledKinds: () => this.enabledKinds(),
+      conversations: () => this.rawConversations(),
+      defaultAgent: () => this.defaultAgent(),
+      setDefaultAgent: (k) => this.store.set('chat.defaultAgent', k),
+      projects: () => this.projects(),
+      workspaceFolders: () => this.platform.workspaceFolders(),
+      saveProject: (p) => this.platform.saveProject(p),
+      screenChat: () => {
+        const v = lastView();
+        return v ? { conversationId: v.conversationId, agent: v.agent } : null;
+      },
+      showChat: (id, agent) => {
+        const v = lastView();
+        if (!v) return;
+        this.show(v, id, id ? (agent ?? this.agentOf(id) ?? v.agent) : (agent ?? v.agent));
+        if (id) v.port.post({ type: 'jarvisNavigate', screen: 'chat', conversationId: id, settingsPage: null });
+      },
+      postActive: (msg) => lastView()?.port.post(msg),
+      broadcast: (msg) => this.broadcast(msg),
+      refreshConversations: () => this.broadcast({ type: 'conversations', conversations: this.allConversations() }),
+      refreshSettings: () => this.refreshSettings(),
+      expand: (t) => this.settings.expand(t),
+      contextEntries: () => this.settings.contextEntries(),
+      uiPrefs: () => this.getUiPrefs(),
+      patchUiPrefs: (p) => this.patchUiPrefs(p),
+      editorContext: () => this.editorCtx,
+      openFile: (p, line) => this.platform.openFile(p, line),
+      openUrl: (u) => this.platform.openUrl(u),
+      searchFiles: (q) => this.platform.searchFiles(q),
+      isOff: () => this.platform.isOff(),
+    };
   }
 
   /** The editor's active file / selection (every view shows it as an offer chip). */
@@ -216,7 +339,7 @@ export class AppHost {
 
   /** Custom commands (every agent) + the agent's own. */
   private commandsFor(agent: AgentKind) {
-    return [...this.settings.slashItems(), ...(this.backendFor(agent)?.commands() ?? [])];
+    return [...(this.plugins?.slashItems() ?? []), ...this.settings.slashItems(), ...(this.backendFor(agent)?.commands() ?? [])];
   }
 
   // ------------------------------------------------------------------ settings
@@ -231,21 +354,22 @@ export class AppHost {
   private async buildSettings(page: string): Promise<SettingsPage> {
     if (page === 'root') {
       // the root only links to pages (as the app): each agent, chat features, connection
-      // each card is a section; no headers between them
-      const names = this.active().map((b) => b.status().label);
+      // as the app's main menu: one card with "Agents" (choose agents, CLI paths) and each enabled agent's page
+      const agentRows = this.active()
+        .map((b) => b.settings?.rootItem())
+        .filter((s): s is SettingItem => !!s);
       const sections: SettingsSection[] = [
-        { id: 'agents', title: '', items: [{ kind: 'page', id: 'agents', label: 'Agents', icon: 'smart_toy', description: names.join(', ') }] },
+        { id: 'agents', title: '', items: [{ kind: 'page', id: 'agents', label: 'Agents', icon: 'smart_toy', description: `${this.enabledKinds().length} enabled` }, ...agentRows] },
         this.settings.chatSection(),
+        ...(this.browser ? [{ id: 'browser', title: '', items: [this.browser.rootItem()] } satisfies SettingsSection] : []),
+        ...(this.plugins ? [{ id: 'plugins', title: '', items: [this.plugins.settings.rootItem()] } satisfies SettingsSection] : []),
+        ...(this.jarvis ? [{ id: 'jarvis', title: '', items: [this.jarvis.settings.rootItem()] } satisfies SettingsSection] : []),
         { id: 'system', title: '', items: [{ kind: 'page', id: 'connection', label: 'Bridge & connection', icon: 'lan', description: `127.0.0.1:${this.platform.bridgeInfo().port}` }] },
       ];
       return { id: 'root', title: 'Settings', sections };
     }
     if (page === 'agents') {
       const labels: Record<AgentKind, string> = { AGY: 'Antigravity', CLAUDE: 'Claude Code', CODEX: 'Codex', OPENCODE: 'OpenCode' };
-      const enabled = this.enabledKinds();
-      const links = this.active()
-        .map((b) => b.settings?.rootItem())
-        .filter((s): s is SettingItem => !!s);
       return {
         id: 'agents',
         title: 'Agents',
@@ -259,7 +383,7 @@ export class AppHost {
                 id: 'agents.enabled',
                 label: 'Enabled agents',
                 description: 'The agents you can start chats with',
-                values: enabled,
+                values: this.enabledKinds(),
                 options: AppHost.ALL.map((k) => ({
                   value: k,
                   label: labels[k],
@@ -268,7 +392,6 @@ export class AppHost {
               },
             ],
           },
-          ...(links.length ? [{ id: 'agent-pages', title: '', items: links }] : []),
           await this.cliLocationsSection(),
         ],
       };
@@ -279,6 +402,9 @@ export class AppHost {
       const p = (await this.backendForPage(page, '')?.settings?.page(page)) ?? { id: page, title: 'Antigravity', sections: [] };
       return { ...p, sections: [...p.sections, this.agyHistorySection()] };
     }
+    if (this.jarvis && (page === 'jarvis' || page.startsWith('jarvis.'))) return this.jarvis.settings.page(page);
+    if (this.browser && (page === 'browser' || page.startsWith('browser.'))) return this.browser.page(page);
+    if (this.plugins && (page === 'plugins' || page.startsWith('plugins.'))) return this.plugins.settings.page(page);
     const own = this.settings.page(page);
     if (own) return own;
     const backend = this.backendForPage(page, '');
@@ -324,16 +450,23 @@ export class AppHost {
     const labels: Record<AgentKind, string> = { AGY: 'Antigravity CLI path (agy)', CLAUDE: 'Claude Code CLI path (claude)', CODEX: 'Codex CLI path (codex)', OPENCODE: 'OpenCode CLI path (opencode)' };
     const custom = this.store.get<Partial<Record<AgentKind, string>>>('cli.paths') ?? {};
     const found = await this.platform.cliStatus().catch(() => ({}) as Awaited<ReturnType<Platform['cliStatus']>>);
-    const items: SettingItem[] = AppHost.ALL.filter((k) => this.backends[k]).map((k) => {
+    const home = process.env.HOME ?? '';
+    const tilde = (p: string) => (home && p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+    const items: SettingItem[] = AppHost.ALL.filter((k) => this.backends[k] && this.isEnabled(k)).map((k) => {
       const f = found[k];
-      const detected = f?.installed ? `Found: ${f.path}${f.version ? ` · ${f.version}` : ''}` : 'Not found on this PC';
+      const detected = f?.installed && f.path ? tilde(f.path) : '';
+      const version = f?.version ? ` · ${f.version}` : '';
       return {
         kind: 'text' as const,
         id: `cli.path.${k}`,
         label: labels[k],
-        description: custom[k] ? `Using your path. ${detected}` : `${detected}. Leave empty to auto-detect.`,
-        value: custom[k] ?? '',
-        placeholder: f?.path || `/path/to/${k === 'AGY' ? 'agy' : k.toLowerCase()}`,
+        description: custom[k]
+          ? `Your path${detected && tilde(custom[k]!) !== detected ? ` (detected: ${detected})` : ''}${version}`
+          : detected
+            ? `Detected automatically${version}`
+            : 'Not found on this PC — install it from the agent’s CLI page, or enter its path',
+        value: custom[k] ? tilde(custom[k]!) : detected,
+        placeholder: `~/.local/bin/${k === 'AGY' ? 'agy' : k.toLowerCase()}`,
       };
     });
     items.push({
@@ -349,12 +482,33 @@ export class AppHost {
   private async postSettings(v: ViewState) {
     const page = v.settingsPage;
     if (!page) return;
+    const titleOf = (id: string) => {
+      const map: Record<string, string> = { agy: 'Antigravity', claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
+      return map[id.split('.')[0]] ?? 'Settings';
+    };
     try {
-      const built = await this.buildSettings(page);
+      // never spin forever: an agent that is down (CLI uninstalled, hub offline) answers with an error page
+      const built = await Promise.race([
+        this.buildSettings(page),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error(this.offlineReason(page) ?? 'Not responding — is the agent running?')), 12_000)),
+      ]);
       if (v.settingsPage === page) v.port.post({ type: 'settings', page: built });
     } catch (e) {
-      this.toast(v, 'error', e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      this.log(`[host] settings ${page}: ${msg}`);
+      if (v.settingsPage === page) v.port.post({ type: 'settings', page: { id: page, title: titleOf(page), sections: [], error: this.offlineReason(page) ?? msg } });
     }
+  }
+
+  /** Why an agent's settings page can't load (its status), or null when it looks fine. */
+  private offlineReason(page: string): string | null {
+    if (this.platform.isOff()) return 'AntiGem is turned off — press Reconnect to start it.';
+    const b = this.backendForPage(page, '');
+    if (!b) return null;
+    const st = b.status();
+    if (st.state === 'online') return null;
+    if (st.state === 'not_installed') return `${st.label} is not installed. Install it from its CLI page.`;
+    return `${st.label} is ${st.state === 'starting' ? 'still starting' : 'not running'}${st.detail ? `: ${st.detail}` : ''}.`;
   }
 
   /** Re-sends open settings pages (light: only pages built from cached state — status / usage changes — never the
@@ -407,14 +561,23 @@ export class AppHost {
   private agentStatuses() {
     const all: AgentKind[] = ['AGY', 'CLAUDE', 'OPENCODE', 'CODEX'];
     const labels: Record<AgentKind, string> = { AGY: 'Antigravity', CLAUDE: 'Claude', OPENCODE: 'OpenCode', CODEX: 'Codex' };
+    const off = this.platform.isOff();
     return all.map((k) =>
       this.backends[k] && this.isEnabled(k)
-        ? this.backends[k]!.status()
+        ? off
+          ? { ...this.backends[k]!.status(), state: 'offline' as const, detail: 'AntiGem is turned off' }
+          : this.backends[k]!.status()
         : { kind: k, label: labels[k], state: 'disabled' as const, detail: this.backends[k] ? 'Turned off in Settings → Agents' : 'Not available yet' },
     );
   }
 
   private allConversations(): Conversation[] {
+    const list = this.rawConversations();
+    return this.jarvis ? this.jarvis.decorateConversations(list) : list;
+  }
+
+  /** Every chat of the enabled agents, newest first (without the Jarvis tags). */
+  private rawConversations(): Conversation[] {
     return this.active()
       .flatMap((b) => b.conversations())
       .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -477,12 +640,14 @@ export class AppHost {
       workspaceFolders: this.platform.workspaceFolders(),
       conversationId: v.port.initialConversationId ?? null,
       defaultAgent: this.defaultAgent(),
+      firstRun: this.store.get('agents.enabled') === undefined,
     });
     v.port.post({ type: 'uiPrefs', prefs: this.uiPrefs() });
     v.port.post({ type: 'editorContext', context: this.editorCtx });
     v.port.post({ type: 'agents', agents: this.agentStatuses() });
     v.port.post({ type: 'conversations', conversations: this.allConversations() });
     for (const b of this.active()) v.port.post({ type: 'models', state: b.models() });
+    if (this.jarvis) v.port.post({ type: 'jarvis', state: this.jarvis.snapshot(), full: true });
   }
 
   /** Points a view at a conversation (or an empty new chat) and streams its state. */
@@ -523,6 +688,8 @@ export class AppHost {
 
   private push(v: ViewState, conversationId: string, state: ChatState) {
     if (v.conversationId !== conversationId) return;
+    // Jarvis' labelled news messages carry their parsed events (the view draws them as event cards)
+    if (this.jarvis) state = { ...state, messages: this.jarvis.decorateMessages(conversationId, state.messages) };
     const patch: ChatPatch = {};
     let any = false;
     const order = state.messages.map((m) => m.id);
@@ -569,12 +736,29 @@ export class AppHost {
     const v = this.views.get(viewId);
     if (!v) return;
     if (msg.type !== 'ready') this.lastActive = viewId;
+    const isSetting = msg.type === 'settingChange' || msg.type === 'settingAction';
+    const done = (ok: boolean, error: string | null) => {
+      if (!isSetting) return;
+      v.port.post({
+        type: 'settingDone',
+        page: msg.page,
+        id: msg.id,
+        rowId: msg.rowId ?? null,
+        actionId: msg.type === 'settingAction' ? (msg.actionId ?? null) : null,
+        ok,
+        error,
+      });
+    };
     try {
       await this.dispatch(v, msg);
+      done(true, null);
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       this.log(`[host] ${msg.type}: ${m}`);
       this.toast(v, 'error', m);
+      done(false, m);
+      // a settings change that failed: show the page as it really is again
+      if (isSetting) void this.postSettings(v);
     }
   }
 
@@ -618,10 +802,13 @@ export class AppHost {
         const selections = msg.attachments.filter((a) => a.kind === 'selection' || a.selectionText != null);
         const others = msg.attachments.filter((a) => !selections.includes(a));
         const withSel = selections.length ? `${msg.text}${selectionBlock(selections)}` : msg.text;
+        // a Jarvis chat carries Jarvis' hidden note (guide, rules, live context, mission) instead of the global context
+        const expanded = this.settings.expand(withSel);
+        const jarvisText = this.jarvis?.wrapSend(msg.conversationId, msg.agent, expanded, msg.isNew, msg.jarvis === true) ?? null;
         await backend.send({
           conversationId: msg.conversationId,
           isNew: msg.isNew,
-          text: this.settings.wrap(this.settings.expand(withSel), msg.isNew),
+          text: jarvisText ?? this.settings.wrap(expanded, msg.isNew),
           attachments: others,
           modelId: msg.modelId,
           workspaceUri: msg.workspaceUri ?? this.platform.workspaceFolders()[0]?.uri ?? null,
@@ -669,6 +856,21 @@ export class AppHost {
         v.settingsPage = null;
         return;
       case 'settingChange': {
+        if (this.browser && (msg.page === 'browser' || msg.page.startsWith('browser.'))) {
+          await this.browser.change(msg.page, msg.id, msg.value);
+          this.refreshSettings();
+          return;
+        }
+        if (this.plugins && (msg.page === 'plugins' || msg.page.startsWith('plugins.'))) {
+          await this.plugins.settings.change(msg.page, msg.id, msg.value, msg.rowId);
+          this.refreshSettings();
+          return;
+        }
+        if (this.jarvis && (msg.page === 'jarvis' || msg.page.startsWith('jarvis.'))) {
+          await this.jarvis.settings.change(msg.page, msg.id, msg.value, msg.rowId);
+          this.refreshSettings();
+          return;
+        }
         if (msg.id === 'agy.dataDir') {
           const name = String(msg.value);
           if (!['antigravity-ide', 'antigravity', 'antigravity-cli'].includes(name)) return;
@@ -683,6 +885,15 @@ export class AppHost {
         if (msg.id.startsWith('cli.path.')) {
           const kind = msg.id.slice('cli.path.'.length) as AgentKind;
           const value = String(msg.value ?? '').trim().replace(/^~(?=\/)/, process.env.HOME ?? '~');
+          // the detected path itself = keep auto-detect
+          const detected = (await this.platform.cliStatus().catch(() => ({}) as Awaited<ReturnType<Platform['cliStatus']>>))[kind]?.path ?? '';
+          if (value && value === detected) {
+            const paths = { ...(this.store.get<Partial<Record<AgentKind, string>>>('cli.paths') ?? {}) };
+            delete paths[kind];
+            this.store.set('cli.paths', paths);
+            this.refreshSettings();
+            return;
+          }
           if (value) {
             let ok = false;
             try {
@@ -720,6 +931,12 @@ export class AppHost {
           result = 'Bridge restarted';
         } else if (msg.id === 'conn.logs') {
           this.platform.showLogs?.();
+        } else if (this.jarvis && (msg.page === 'jarvis' || msg.page.startsWith('jarvis.'))) {
+          result = await this.jarvis.settings.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
+        } else if (this.browser && (msg.page === 'browser' || msg.page.startsWith('browser.'))) {
+          result = await this.browser.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
+        } else if (this.plugins && (msg.page === 'plugins' || msg.page.startsWith('plugins.'))) {
+          result = await this.plugins.settings.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
         } else {
           result = this.settings.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
           if (result === null) result = await this.backendForPage(msg.page, msg.id)?.settings?.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
@@ -755,14 +972,34 @@ export class AppHost {
         return;
       }
       case 'retryConnections':
+        if (this.platform.isOff()) {
+          this.platform.powerOn();
+          this.broadcast({ type: 'agents', agents: this.agentStatuses() });
+        }
         for (const b of this.active()) b.retry();
         return;
+      case 'powerOff': {
+        if (!(await this.platform.confirm('Turn AntiGem off? The bridge and every agent stop (running chats are stopped).'))) return;
+        await this.platform.powerOff();
+        this.broadcast({ type: 'agents', agents: this.agentStatuses() });
+        this.broadcast({ type: 'toast', level: 'info', message: 'AntiGem is off — Reconnect starts it again' });
+        return;
+      }
       case 'toolAction':
         await this.backendFor(this.agentOf(msg.conversationId) ?? v.agent)?.toolAction?.(msg.conversationId, msg.toolId, msg.action);
         return;
       case 'setQuotaGroup':
         this.backendFor(msg.agent)?.setQuotaGroup?.(msg.modelId, msg.group);
         return;
+      case 'requestJarvis':
+        if (this.jarvis) v.port.post({ type: 'jarvis', state: this.jarvis.snapshot(), full: true });
+        return;
+      case 'jarvisAction': {
+        if (!this.jarvis) throw new Error('Jarvis is not available in this window');
+        const r = await this.jarvis.action(msg, v.id);
+        if (r) this.toast(v, 'info', r);
+        return;
+      }
       case 'readImage': {
         let dataUrl: string | null = null;
         try {
@@ -812,6 +1049,44 @@ export class AppHost {
       case 'setControl':
         await this.backendFor(msg.agent)?.setControl?.(msg.conversationId, msg.id, msg.value);
         return;
+      case 'requestNotes':
+        v.port.post({ type: 'notes', notes: this.notes?.all() ?? [] });
+        return;
+      case 'notesAction': {
+        const n = this.notes;
+        if (!n) return;
+        const note = msg.note;
+        if (msg.action === 'create') {
+          if (note.id && !n.get(note.id)) {
+            // the screen made the note (its id, its rows — blank ones too, it is still being typed): keep it as it is
+            const now = Date.now();
+            n.restore({
+              id: note.id,
+              kind: note.kind === 'todo' ? 'todo' : 'note',
+              title: note.title ?? '',
+              text: note.text ?? '',
+              items: (note.items ?? []).map((i) => ({ id: i.id || randomUUID(), text: i.text ?? '', done: i.done === true })),
+              pinned: note.pinned === true,
+              createdAt: note.createdAt ?? now,
+              updatedAt: now,
+            });
+          } else n.create(note.kind === 'todo' ? 'todo' : 'note', note.title ?? '', note.text ?? '', (note.items ?? []).map((i) => i.text), note.pinned === true);
+        } else if (msg.action === 'update' && note.id) {
+          n.update(note.id, (cur) => ({
+            ...cur,
+            kind: note.kind ?? cur.kind,
+            title: note.title ?? cur.title,
+            text: note.text ?? cur.text,
+            items: note.items ?? cur.items,
+            pinned: note.pinned ?? cur.pinned,
+          }));
+        } else if (msg.action === 'delete' && note.id) {
+          n.delete(note.id);
+        } else if (msg.action === 'restore' && note.id && note.createdAt) {
+          n.restore(note as Parameters<NotesStore['restore']>[0]);
+        }
+        return;
+      }
       case 'requestProjects':
         v.port.post({ type: 'projects', reqId: msg.reqId, projects: await this.projects() });
         return;
@@ -882,6 +1157,7 @@ export class AppHost {
       if (!arg) return;
     }
     const res = await backend.conversationAction(id, action as 'delete' | 'fork' | 'rename' | 'archive' | 'unarchive', arg);
+    if (action === 'delete') this.jarvis?.onChatDeleted(id);
     if (action === 'delete' && v.conversationId === id) this.show(v, null, v.agent);
     if (action === 'fork' && typeof res === 'string' && res) this.show(v, res, backend.kind);
   }
@@ -889,6 +1165,8 @@ export class AppHost {
   dispose() {
     for (const v of this.views.values()) v.unsubscribe?.();
     this.views.clear();
+    this.jarvis?.dispose();
+    this.plugins?.dispose();
     this.unsubs.forEach((u) => u());
     for (const b of Object.values(this.backends)) b?.dispose();
   }

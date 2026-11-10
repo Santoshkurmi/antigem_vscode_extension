@@ -4,7 +4,7 @@
 // output, a diff) → a pending approval → a question → a queued message → final reply with token usage.
 // URL options: ?mock&view=panel (editor tab layout) · &empty (start on a new chat) · &theme=light|dark · &fast
 import type { AgentKind, AiModel, ArtifactSnapshot, ChatAttachment, ChatMessage, Conversation, QueuedMessage, ToolCall } from '@shared/model';
-import type { AgentStatus, ApprovalView, ChatPatch, ControlChipView, HostToView, ModelsState, QuestionView, SlashCommandView, ViewToHost } from '@shared/protocol';
+import type { AgentStatus, ApprovalView, ChatPatch, ControlChipView, HostToView, JarvisState, ModelsState, NoteView, QuestionView, SlashCommandView, ViewToHost } from '@shared/protocol';
 import { createMockSettings } from './mockSettings';
 
 type Post = (m: HostToView) => void;
@@ -44,8 +44,17 @@ function conv(p: Partial<Conversation> & { id: string; title: string; agent: Age
 
 const MAIN = 'conv-weather-dashboard';
 const SHOWCASE = 'conv-vscode-tour';
+const JARVIS_CHAT = 'conv-jarvis-launch';
+const SUBS = 'claude-subagents-demo';
+const JARVIS_TASK = 'conv-jarvis-task-parser';
 
 function buildConversations(): Conversation[] {
+  // ?nojarvis: Jarvis is off, so its chats are not listed
+  if (params.has('nojarvis')) return allConversations().filter((c) => !c.isJarvis && !c.jarvisHidden);
+  return allConversations();
+}
+
+function allConversations(): Conversation[] {
   return [
     conv({ id: MAIN, title: 'Build a single page weather dashboard', agent: 'CLAUDE', updatedAt: now - 2 * MIN, workspaceUri: WS.weather }),
     conv({ id: 'c-explore', title: 'Explore: chart libraries', agent: 'CLAUDE', parentConversationId: MAIN, subagentRole: 'Explore · chart libraries', nestingDepth: 1, updatedAt: now - 3 * MIN }),
@@ -53,6 +62,12 @@ function buildConversations(): Conversation[] {
     conv({ id: 'agy-sub-1', title: 'Write unit tests for hub.go', agent: 'AGY', parentConversationId: 'agy-refactor', subagentRole: 'Test writer', nestingDepth: 1, isRunning: true, updatedAt: now - 9 * MIN, workspaceUri: WS.antigem }),
     conv({ id: 'agy-sub-2', title: 'Review lock ordering', agent: 'AGY', parentConversationId: 'agy-refactor', subagentRole: 'Reviewer', nestingDepth: 1, updatedAt: now - 30 * MIN, workspaceUri: WS.antigem }),
     conv({ id: 'agy-sub-2a', title: 'Check race detector output', agent: 'AGY', parentConversationId: 'agy-sub-2', subagentRole: 'Race check', nestingDepth: 2, updatedAt: now - 32 * MIN, workspaceUri: WS.antigem }),
+    conv({ id: SUBS, title: 'Refactor the chart module', agent: 'CLAUDE', updatedAt: now - 4 * MIN, workspaceUri: WS.weather, isRunning: true }),
+    conv({ id: `${SUBS}:agent-a1`, title: 'Study agy integration path', agent: 'CLAUDE', parentConversationId: SUBS, subagentRole: 'Study agy integration path', subagentTypeName: 'Explore', nestingDepth: 1, isRunning: true, runStatus: 'RUNNING', updatedAt: now - 4 * MIN, workspaceUri: WS.weather }),
+    conv({ id: `${SUBS}:agent-a2`, title: 'Port app UI to SolidJS webview', agent: 'CLAUDE', parentConversationId: SUBS, subagentRole: 'Port app UI to SolidJS webview', subagentTypeName: 'general-purpose', nestingDepth: 1, updatedAt: now - 6 * MIN, workspaceUri: WS.weather }),
+    conv({ id: `${SUBS}:agent-a3`, title: 'Check the icon set', agent: 'CLAUDE', parentConversationId: `${SUBS}:agent-a2`, subagentRole: 'Check the icon set', subagentTypeName: 'Explore', nestingDepth: 2, updatedAt: now - 7 * MIN, workspaceUri: WS.weather }),
+    conv({ id: JARVIS_CHAT, title: 'Launch the weather app', agent: 'CLAUDE', updatedAt: now - 1 * MIN, workspaceUri: WS.weather, isJarvis: true, isRunning: true }),
+    conv({ id: JARVIS_TASK, title: 'Parser: forecast API client', agent: 'CODEX', updatedAt: now - 1 * MIN, workspaceUri: WS.weather, jarvisHidden: true, isRunning: true }),
     conv({ id: SHOWCASE, title: 'VS Code features tour', agent: 'CLAUDE', updatedAt: now - 30 * MIN, workspaceUri: WS.weather, modelId: 'opus' }),
     conv({ id: 'oc-api', title: 'Add pagination to /v1/orders', agent: 'OPENCODE', updatedAt: now - 2 * HOUR, workspaceUri: WS.api, hasActivity: true }),
     conv({ id: 'codex-ci', title: 'Fix flaky CI job on arm64', agent: 'CODEX', updatedAt: now - 5 * HOUR, workspaceUri: WS.antigem }),
@@ -72,10 +87,10 @@ function buildConversations(): Conversation[] {
 }
 
 const AGENTS: AgentStatus[] = [
-  { kind: 'AGY', label: 'Ready', state: 'online', detail: 'dev@example.com · Pro' },
-  { kind: 'CLAUDE', label: 'Ready', state: 'online', detail: 'dev@example.com · Max · 2.4.1' },
-  { kind: 'OPENCODE', label: 'Starting…', state: 'starting', detail: 'Starting… waiting for the server.' },
-  { kind: 'CODEX', label: 'Ready', state: 'online', detail: 'dev@example.com · Plus · Codex 0.48' },
+  { kind: 'AGY', label: 'Ready', state: 'online', detail: 'dev@example.com · Pro', account: 'dev@example.com', version: '1.5.3', plan: 'Google AI Pro', setupPage: 'agy.cli' },
+  { kind: 'CLAUDE', label: 'Ready', state: 'online', detail: 'dev@example.com · Max · 2.4.1', account: 'dev@example.com', version: '2.4.1 (Claude Code)', plan: 'Max', setupPage: 'claude' },
+  { kind: 'OPENCODE', label: 'Starting…', state: 'starting', detail: 'Starting… waiting for the server.', version: '1.0.3', setupPage: 'opencode' },
+  { kind: 'CODEX', label: 'Ready', state: 'online', detail: 'dev@example.com · Plus · Codex 0.48', account: 'dev@example.com', version: 'codex-cli 0.48.0', plan: 'Plus', setupPage: 'codex' },
 ];
 
 // the weather chat's artifacts (ArtifactsDrawerContent)
@@ -253,6 +268,11 @@ const COMMANDS: SlashCommandView[] = [
   { command: '/add-dir', description: 'Add a working directory', argumentHint: '<path>', kind: 'command' },
   { command: '/xlsx', description: 'Create and edit spreadsheets', kind: 'skill', pluginName: 'docs' },
   { command: '/release-notes', description: 'Draft release notes from the git log', kind: 'plugin', pluginName: 'antigem-tools' },
+  // custom AntiGem plugins: one row per plugin (`/plu:<id>:`, or `/plu:<id>` without skills) and one per skill
+  { command: '/plu:weather-kit:', description: 'Weather Kit · 3 tools · 2 skills · Forecast and radar helpers', kind: 'plugin', pluginName: 'Weather Kit' },
+  { command: '/plu:weather-kit:forecast', description: 'Fetch a 7-day forecast for a city', kind: 'plugin', pluginName: 'Weather Kit' },
+  { command: '/plu:weather-kit:radar', description: 'Show the rain radar around a place', kind: 'plugin', pluginName: 'Weather Kit' },
+  { command: '/plu:design-tools', description: 'Design Tools · 4 tools · Colors, spacing and icons', kind: 'plugin', pluginName: 'Design Tools' },
   { command: '/frontend-design', description: 'Design guidance for polished UIs', kind: 'skill' },
   { command: '/pdf', description: 'Read, fill and merge PDF files', kind: 'skill', pluginName: 'docs' },
   { command: '/deploy', description: 'Build and publish to GitHub Pages', argumentHint: '<branch>', kind: 'custom' },
@@ -461,6 +481,10 @@ export function startMock(post: Post): (m: ViewToHost) => void {
         modelId: conversation?.agent === 'CLAUDE' && conversation.modelId && conversation.modelId !== 'default' ? conversation.modelId : null,
         // Codex / OpenCode: a provider notice above the strip for a while
         notice: conversation?.agent === 'CODEX' ? 'Model rerouted: gpt-5-codex is busy, using gpt-5 · retrying in 3s' : null,
+        // a Claude subagent's chat: it takes instructions from its parent only
+        readOnly: cid.includes(':agent-')
+          ? `Subagent of “${conversations.find((x) => x.id === conversation?.parentConversationId)?.title ?? 'its chat'}” · it takes instructions from that chat only`
+          : null,
       });
       if (conversation?.agent === 'CODEX') setTimeout(() => current === cid && patch(cid, { notice: null }), 7000 * SPEED);
     }, 450 * SPEED);
@@ -814,6 +838,12 @@ export function startMock(post: Post): (m: ViewToHost) => void {
   // ---------------------------------------------------------------- view → host
   const mockSettings = createMockSettings(post);
   let savedProjects = [WS.api, 'file:///home/dev/projects/old-blog'];
+  const jstate = jarvisState();
+  let mockNotes: NoteView[] = [
+    { id: 'n1', kind: 'todo', title: 'Ship the weather dashboard', text: '', items: [{ id: 'i1', text: 'Hourly chart on canvas', done: true }, { id: 'i2', text: 'Reduced-motion fallback', done: true }, { id: 'i3', text: 'Smaller forecast cards on phones', done: false }, { id: 'i4', text: 'Lighthouse pass', done: false }], pinned: true, createdAt: now - 3 * DAY, updatedAt: now - 20 * MIN },
+    { id: 'n2', kind: 'note', title: 'API keys', text: 'OpenWeather: in .env as WEATHER_KEY\nNever commit it — the agent knows (see CLAUDE.md).', items: [], pinned: false, createdAt: now - 5 * DAY, updatedAt: now - 2 * HOUR },
+    { id: 'n3', kind: 'note', title: 'Ideas', text: 'Aurora background that follows the sunrise time.\nA tiny sparkline in the tab title?', items: [], pinned: false, createdAt: now - 9 * DAY, updatedAt: now - 2 * DAY },
+  ];
   return (m: ViewToHost) => {
     if (mockSettings.handle(m)) return;
     switch (m.type) {
@@ -828,7 +858,14 @@ export function startMock(post: Post): (m: ViewToHost) => void {
           ],
           conversationId: params.has('empty') ? null : MAIN,
           defaultAgent: 'CLAUDE',
+          firstRun: params.has('firstrun'),
         });
+        // ?missing=AGENT: that agent's CLI is not installed (the setup card, the Install banner)
+        if (params.has('missing')) {
+          const k = (params.get('missing') || 'CODEX').toUpperCase();
+          const a = agents.find((x) => x.kind === k);
+          if (a) Object.assign(a, { state: 'not_installed', label: 'Not installed', detail: 'The CLI is not installed on this machine.', account: null, plan: null, version: null });
+        }
         // ?offline=AGENT (default: the weather chat's Claude Code): that agent is down (the disconnected banner)
         if (params.has('offline')) {
           const k = (params.get('offline') || 'CLAUDE').toUpperCase();
@@ -1090,6 +1127,97 @@ export function startMock(post: Post): (m: ViewToHost) => void {
         setTimeout(() => post({ type: 'chatSearchResult', reqId: m.reqId, results }), 250);
         break;
       }
+      case 'requestJarvis':
+        post({ type: 'jarvis', state: JSON.parse(JSON.stringify(jstate)), full: true });
+        break;
+      case 'jarvisAction': {
+        const t = m.taskId ? jstate.tasks.find((x) => x.id === m.taskId) : null;
+        const mgr = jstate.managers.find((x) => x.chatId === (m.chatId ?? JARVIS_CHAT))!;
+        const patchJ = (p: Record<string, unknown>) => post({ type: 'jarvis', state: JSON.parse(JSON.stringify(p)) });
+        switch (m.action) {
+          case 'setAutopilot':
+            if (mgr.mission) mgr.mission.autopilot = !!m.on;
+            patchJ({ managers: jstate.managers });
+            break;
+          case 'pauseMission':
+          case 'resumeMission':
+            if (mgr.mission) mgr.mission.status = m.action === 'pauseMission' ? 'paused' : 'active';
+            patchJ({ managers: jstate.managers });
+            break;
+          case 'clearMission':
+            mgr.mission = null;
+            patchJ({ managers: jstate.managers });
+            break;
+          case 'removeTeam':
+            mgr.teams = mgr.teams.filter((x) => x.name !== m.teamName);
+            patchJ({ managers: jstate.managers });
+            break;
+          case 'stopTask':
+            if (t) Object.assign(t, { state: 'stopped', stateLabel: 'stopped', active: false });
+            patchJ({ tasks: jstate.tasks });
+            post({ type: 'toast', level: 'info', message: 'Stopped 1 task' });
+            break;
+          case 'dismissTask':
+            jstate.tasks = jstate.tasks.filter((x) => x.id !== m.taskId);
+            patchJ({ tasks: jstate.tasks });
+            break;
+          case 'clearFinished':
+            jstate.tasks = jstate.tasks.filter((x) => x.active);
+            patchJ({ tasks: jstate.tasks });
+            break;
+          case 'openTask':
+            if (t) open(t.id);
+            post({ type: 'jarvisNavigate', screen: 'chat', conversationId: m.taskId });
+            break;
+          case 'dismissNotice':
+            jstate.notices = m.noticeId ? jstate.notices.filter((x) => x.id !== m.noticeId) : [];
+            patchJ({ notices: jstate.notices });
+            break;
+          case 'clearLog':
+            jstate.log = [];
+            patchJ({ log: [] });
+            break;
+          case 'stopAll':
+            for (const x of jstate.tasks) if (x.active) Object.assign(x, { state: 'stopped', stateLabel: 'stopped', active: false });
+            for (const x of jstate.managers) Object.assign(x, { phase: 'idle', status: null, activeTasks: 0 });
+            jstate.anyActive = false;
+            patchJ({ tasks: jstate.tasks, managers: jstate.managers, anyActive: false });
+            post({ type: 'toast', level: 'info', message: 'Stopped Jarvis and its tasks' });
+            break;
+          case 'newChat':
+            open(null, 'CLAUDE');
+            setTimeout(() => post({ type: 'jarvisNewChat', agent: 'CLAUDE', modelId: 'opus' }), 60);
+            break;
+          case 'openSettings':
+            post({ type: 'jarvisNavigate', screen: 'settings', settingsPage: m.settingsPage ?? 'jarvis' });
+            break;
+          default:
+            post({ type: 'toast', level: 'info', message: `Jarvis: ${m.action}` });
+        }
+        break;
+      }
+      case 'requestNotes':
+        setTimeout(() => post({ type: 'notes', notes: JSON.parse(JSON.stringify(mockNotes)) }), 200);
+        break;
+      case 'notesAction': {
+        const n = m.note;
+        if (m.action === 'create' || m.action === 'restore') mockNotes.unshift({ kind: 'note', title: '', text: '', items: [], pinned: false, createdAt: Date.now(), ...n, id: n.id ?? id('note'), updatedAt: Date.now() } as NoteView);
+        else if (m.action === 'update') {
+          const i = mockNotes.findIndex((x) => x.id === n.id);
+          if (i >= 0) mockNotes[i] = { ...mockNotes[i], ...n, updatedAt: Date.now() } as NoteView;
+        } else if (m.action === 'delete') mockNotes = mockNotes.filter((x) => x.id !== n.id);
+        setTimeout(() => post({ type: 'notes', notes: JSON.parse(JSON.stringify(mockNotes)) }), 120);
+        break;
+      }
+      case 'powerOff':
+        // the host asks first; then everything stops until Reconnect
+        for (const a of agents) Object.assign(a, { state: 'offline', label: 'Off', detail: 'AntiGem is turned off' });
+        post({ type: 'agents', agents: agents.map((a) => ({ ...a })) });
+        post({ type: 'toast', level: 'info', message: 'AntiGem is turned off' });
+        break;
+      case 'settingChange':
+        if (m.page === 'agents' && m.id === 'agents.enabled' && Array.isArray(m.value)) post({ type: 'toast', level: 'info', message: `Starting ${(m.value as string[]).length} agent(s)…` });
+        break;
       case 'saveFile':
         console.info('[mock] saveFile', m.suggestedName, `${m.content.length} chars`);
         post({ type: 'toast', level: 'info', message: `Save dialog: ${m.suggestedName} (${Math.round(m.content.length / 1024)} KB)` });
@@ -1156,6 +1284,8 @@ export function startMock(post: Post): (m: ViewToHost) => void {
 
 function historyFor(cid: string): ChatMessage[] {
   if (cid === SHOWCASE) return showcaseHistory(cid);
+  if (cid === JARVIS_CHAT) return jarvisHistory(cid);
+  if (cid === SUBS) return subagentsHistory(cid);
   if (cid === MAIN) {
     const t0 = now - DAY - 2 * HOUR;
     return [
@@ -1189,14 +1319,16 @@ function historyFor(cid: string): ChatMessage[] {
   const c = buildConversations().find((x) => x.id === cid);
   if (!c) return []; // a chat created in this session starts empty
   const title = c.title;
+  // tool ids are plain words (a subagent's chat id has ':' in it)
+  const tid = cid.replace(/[^\w-]/g, '_');
   return [
     { id: `${cid}-u`, conversationId: cid, role: 'USER', content: title, toolCalls: [], isStreaming: false, attachments: [], createdAt: (c?.updatedAt ?? now) - 5 * MIN },
     {
       id: `${cid}-a`,
       conversationId: cid,
       role: 'ASSISTANT',
-      content: `Here is what I did for **${title.toLowerCase()}**:\n\n1. Read the relevant files\n2. Made the change\n3. Ran the checks\n\n<!-- tool_call:${cid}-t1 -->\n\nEverything passes. See \`README.md\` for the details.`,
-      toolCalls: [{ id: `${cid}-t1`, name: 'Bash', toolType: 'BASH', command: 'make test', status: 'SUCCESS', output: 'ok  \tall tests passed (0.84s)', exitCode: 0, durationMs: 1840 }],
+      content: `Here is what I did for **${title.toLowerCase()}**:\n\n1. Read the relevant files\n2. Made the change\n3. Ran the checks\n\n<!-- tool_call:${tid}-t1 -->\n\nEverything passes. See \`README.md\` for the details.`,
+      toolCalls: [{ id: `${tid}-t1`, name: 'Bash', toolType: 'BASH', command: 'make test', status: 'SUCCESS', output: 'ok  \tall tests passed (0.84s)', exitCode: 0, durationMs: 1840 }],
       isStreaming: false,
       attachments: [],
       createdAt: (c?.updatedAt ?? now) - 4 * MIN,
@@ -1275,6 +1407,119 @@ function showcaseHistory(cid: string): ChatMessage[] {
       modelId: 'opus',
     },
     { id: `${cid}-u2`, conversationId: cid, role: 'USER', content: 'Thanks! Now make the forecast cards a bit smaller.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 + 5 * MIN, contextSummary: 'The user is building a weather dashboard (index.html, style.css, app.js). Done: glass cards, aurora background, hourly canvas chart with high-DPI scaling. Next: smaller forecast cards.' },
-    { id: `${cid}-a2`, conversationId: cid, role: 'ASSISTANT', content: 'Done: the forecast cards are now `min-width: 72px` with `gap: 8px`, so all seven fit on a phone.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 + 6 * MIN },
+    { id: `${cid}-a2`, conversationId: cid, role: 'ASSISTANT', content: 'Done: the forecast cards are now `min-width: 72px` with `gap: 8px`, so all seven fit on a phone.\n\nMarkers quoted in code stay text: `<!-- error -->{"title":"Boom","userMessage":"x"}<!-- /error -->` and `<!-- tool_call:<id> -->`, also mid-sentence <!-- tool_call:abc_1 --> like this.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 + 6 * MIN },
   ];
+}
+
+// ------------------------------------------------------------------------------------------------ Jarvis
+
+function jarvisState(): JarvisState {
+  const t = Date.now();
+  return {
+    // ?nojarvis: Jarvis off, as it is by default (screenshots of the normal app)
+    enabled: !params.has('nojarvis'),
+    listMode: 'none',
+    agent: 'CLAUDE',
+    modelId: 'opus',
+    chatIds: [JARVIS_CHAT],
+    managers: [
+      {
+        chatId: JARVIS_CHAT,
+        agent: 'CLAUDE',
+        title: 'Launch the weather app',
+        mission: {
+          goal: 'Ship the weather dashboard to production',
+          doneWhen: 'Deployed on Pages, Lighthouse ≥ 95, tests green',
+          steps: [
+            { n: 1, text: 'Forecast API client with retries', status: 'doing', note: 'Parser team on it' },
+            { n: 2, text: 'Accessibility pass on the cards', status: 'done', note: '' },
+            { n: 3, text: 'Lighthouse ≥ 95 on mobile', status: 'todo', note: '' },
+            { n: 4, text: 'Deploy to GitHub Pages', status: 'blocked', note: 'needs the repo secret' },
+          ],
+          status: 'active',
+          autopilot: true,
+          notes: 'Keep the bundle under 50 KB.',
+          doneCount: 1,
+          updatedAt: t - 60_000,
+        },
+        teams: [
+          { name: 'Parser', agent: 'CODEX', model: 'gpt-5-codex', role: 'Builds the forecast API client and its tests', project: 'nebula-weather', runningTasks: 1 },
+          { name: 'Reviewer', agent: 'CLAUDE', model: 'sonnet', role: 'Reviews every change before it lands', project: 'nebula-weather', runningTasks: 0 },
+        ],
+        status: 'Waiting for Parser: client.js retries',
+        phase: 'working',
+        steps: [
+          { text: 'Checked the a11y report: 0 issues left', at: t - 90_000, done: true },
+          { text: 'Asked Parser to add exponential backoff', at: t - 40_000, done: true },
+          { text: 'Waiting for Parser: client.js retries', at: t - 5_000, done: false },
+        ],
+        activeTasks: 2,
+        needsAttention: true,
+        toolsMissing: false,
+        pendingEvents: 1,
+      },
+    ],
+    tasks: [
+      { id: JARVIS_TASK, title: 'Parser: forecast API client', goal: 'Retries with backoff, typed errors', agent: 'CODEX', state: 'running', stateLabel: 'running', active: true, needsUser: false, owner: JARVIS_CHAT, team: 'Parser', project: 'nebula-weather', note: 'editing client.js', createdAt: t - 600_000, updatedAt: t - 20_000, followUps: 1 },
+      { id: 'conv-jarvis-task-review', title: 'Reviewer: a11y fixes', goal: 'Review the card markup', agent: 'CLAUDE', state: 'waiting_approval', stateLabel: 'waiting for approval', active: true, needsUser: true, owner: JARVIS_CHAT, team: 'Reviewer', project: 'nebula-weather', note: 'wants to run npm run lint -- --fix', createdAt: t - 900_000, updatedAt: t - 60_000, followUps: 0 },
+      { id: 'conv-jarvis-task-icons', title: 'Icons: weather glyph set', goal: 'SVG icons', agent: 'OPENCODE', state: 'done', stateLabel: 'done', active: false, needsUser: false, owner: JARVIS_CHAT, team: '', project: 'nebula-weather', note: '12 icons', createdAt: t - 3_600_000, updatedAt: t - 1_800_000, followUps: 0 },
+    ],
+    notices: [{ id: 'nt1', text: 'Reviewer wants to run npm run lint -- --fix', level: 'warning', action: 'chat', chatId: 'conv-jarvis-task-review', at: t - 10_000 }],
+    log: [
+      { at: t - 3_700_000, kind: 'chat', text: 'New Jarvis chat', chatId: JARVIS_CHAT },
+      { at: t - 3_600_000, kind: 'task', text: 'Started Icons (OpenCode)', taskId: 'conv-jarvis-task-icons' },
+      { at: t - 1_800_000, kind: 'event', text: 'Icons finished: 12 icons' },
+      { at: t - 600_000, kind: 'task', text: 'Started Parser (Codex)', taskId: JARVIS_TASK },
+      { at: t - 60_000, kind: 'approval', text: 'Reviewer asks to run npm run lint -- --fix' },
+    ],
+    timers: [],
+    anyActive: true,
+  } as JarvisState;
+}
+
+function jarvisHistory(cid: string): ChatMessage[] {
+  const t0 = now - 70 * MIN;
+  return [
+    { id: `${cid}-u1`, conversationId: cid, role: 'USER', content: 'Ship the weather dashboard: API client, a11y, Lighthouse 95+, deploy to Pages. Use teams.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 },
+    { id: `${cid}-a1`, conversationId: cid, role: 'ASSISTANT', content: 'Mission set with 4 steps. I started **Icons** (OpenCode) and **Parser** (Codex); the **Reviewer** team checks every change. I will report back as they finish.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 + 60_000 },
+    {
+      id: `${cid}-e1`,
+      conversationId: cid,
+      role: 'USER',
+      content: '⚡ Jarvis · 2 updates — Icons done, Reviewer waits for approval',
+      toolCalls: [],
+      isStreaming: false,
+      attachments: [],
+      createdAt: t0 + 40 * MIN,
+      jarvisEvents: [
+        { kind: 'task_done', title: 'Icons: weather glyph set', team: '', agent: 'opencode', taskId: 'conv-jarvis-task-icons', text: 'Added 12 SVG icons under assets/icons (sun, cloud, rain…), each under 1 KB, with a sprite sheet.' },
+        { kind: 'task_approval', title: 'Reviewer: a11y fixes', team: 'Reviewer', agent: 'claude', taskId: 'conv-jarvis-task-review', text: 'wants to run: npm run lint -- --fix' },
+        { kind: 'nudge', title: '', team: '', agent: '', taskId: '', text: 'Autopilot: Lighthouse step has no owner yet — keep going.' },
+      ],
+    },
+    { id: `${cid}-a2`, conversationId: cid, role: 'ASSISTANT', content: 'Icons look good. The lint fix is safe, approve it in the Reviewer chat. Next: Lighthouse after Parser lands.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 + 41 * MIN },
+  ] as ChatMessage[];
+}
+
+// ------------------------------------------------------------------------------------------------ Claude subagents
+
+function subagentsHistory(cid: string): ChatMessage[] {
+  const t0 = now - 12 * MIN;
+  return [
+    { id: `${cid}-u1`, conversationId: cid, role: 'USER', content: 'Refactor src/chart into small modules. Use subagents to study the integration and port the UI.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 },
+    {
+      id: `${cid}-a1`,
+      conversationId: cid,
+      role: 'ASSISTANT',
+      content: `I'll split the work between two subagents.\n\n<!-- tool_call:${cid}-t1 -->\n<!-- tool_call:${cid}-t2 -->\n\nBoth are on it; I'll merge their results.`,
+      toolCalls: [
+        { id: `${cid}-t1`, name: 'Agent', toolType: 'OTHER', command: 'Study agy integration path', status: 'RUNNING', output: 'Running in the background', exitCode: null, durationMs: 0, subagentConversationId: `${cid}:agent-a1` },
+        { id: `${cid}-t2`, name: 'Agent', toolType: 'OTHER', command: 'Port app UI to SolidJS webview', status: 'SUCCESS', output: 'Ported the drawer, top bar and composer. 3 files changed; typecheck passes.', exitCode: 0, durationMs: 182_000, subagentConversationId: `${cid}:agent-a2` },
+      ],
+      isStreaming: false,
+      attachments: [],
+      createdAt: t0 + 60_000,
+    },
+    { id: `${cid}-a2`, conversationId: cid, role: 'ASSISTANT', content: '_Agent "Port app UI to SolidJS webview" finished_\n\nThe UI port is in. Waiting for the integration study before merging.', toolCalls: [], isStreaming: false, attachments: [], createdAt: t0 + 4 * MIN },
+  ] as ChatMessage[];
 }

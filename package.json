@@ -1,7 +1,7 @@
 {
   "name": "antigem-vscode-extension",
   "displayName": "AntiGem VSCode Extension",
-  "description": "One chat UI for Antigravity (agy), Claude Code, Codex and OpenCode — the AntiGem app (VS Code port of the AntiGem Android app: https://github.com/santoshkurmi/antigem), inside VS Code.",
+  "description": "One chat UI for Antigravity (agy), Claude Code, Codex and OpenCode \u2014 the AntiGem app (VS Code port of the AntiGem Android app: https://github.com/santoshkurmi/antigem), inside VS Code.",
   "publisher": "santoshkurmi",
   "version": "0.1.0",
   "license": "GPL-3.0",
@@ -12,6 +12,21 @@
   "categories": [
     "AI",
     "Chat"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding agent",
+    "multi-agent",
+    "chat",
+    "claude code",
+    "claude",
+    "codex",
+    "opencode",
+    "antigravity",
+    "agy",
+    "gemini",
+    "mcp"
   ],
   "extensionKind": [
     "workspace"
@@ -148,6 +163,11 @@
           ],
           "default": "AGY",
           "description": "Agent picked for a new chat."
+        },
+        "antigem.mcpPort": {
+          "type": "number",
+          "default": 1246,
+          "description": "Port of AntiGem's built-in MCP servers (notes, theme, Jarvis, browser\u2026) on 127.0.0.1."
         }
       }
     },

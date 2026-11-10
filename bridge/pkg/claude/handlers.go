@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -30,6 +31,7 @@ var upgrader = websocket.Upgrader{
 //	POST   /api/claude/auth/logout              `claude auth logout`
 //	GET    /api/claude/sessions                 session list for the sidebar
 //	GET    /api/claude/sessions/{id}/history    main-chain transcript entries + live state (?full=1: also the live part)
+//	GET    /api/claude/sessions/{id}/subagents  subagent runs (also in /sessions); …/subagents/{agent}/history[?from=<byte>] = its transcript
 //	POST   /api/claude/sessions/{id}/title      {"title": "..."}
 //	POST   /api/claude/sessions/{id}/archive    {"archived": true|false} (kept by the bridge, see archive.go)
 //	POST   /api/claude/sessions/{id}/kill       stop the process
@@ -117,6 +119,33 @@ func (m *Manager) handleSessionREST(w http.ResponseWriter, r *http.Request, rest
 			s.Restart()
 			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "restarted": true})
 		}
+	case action == "subagents" && r.Method == http.MethodGet && len(parts) == 2:
+		// + the transcript's own size / time: a client showing a chat another process writes polls this cheaply
+		resp := map[string]interface{}{"success": true, "subagents": m.Subagents(id)}
+		if t := m.FindTranscript(id); t != "" {
+			if fi, err := os.Stat(t); err == nil {
+				resp["updated_at"] = fi.ModTime().UnixMilli()
+				resp["size_bytes"] = fi.Size()
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
+	case action == "subagents" && r.Method == http.MethodGet && len(parts) == 4 && parts[3] == "history":
+		// a subagent's own transcript (read-only: subagents are driven by their parent chat)
+		from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+		entries, next, err := m.SubagentHistory(id, parts[2], from)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]interface{}{"success": false, "error": "subagent not found"})
+			return
+		}
+		var sub *SubagentSummary
+		for _, s := range m.Subagents(id) {
+			if s.AgentID == parts[2] {
+				s := s
+				sub = &s
+				break
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "entries": entries, "next": next, "subagent": sub})
 	case action == "history" && r.Method == http.MethodGet:
 		// full=1: everything the transcript holds so far, also while the chat's process is live (a read without
 		// attaching: export, Jarvis reading a task's reply). Without it a live process' part is left out, because an
@@ -140,6 +169,14 @@ func (m *Manager) handleSessionREST(w http.ResponseWriter, r *http.Request, rest
 				cut = &at
 			}
 		}
+		// the transcript's size / time before reading it: a client compares it with later polls (another process may
+		// write this chat)
+		var stampAt, stampSize int64
+		if t := m.FindTranscript(id); t != "" {
+			if fi, err := os.Stat(t); err == nil {
+				stampAt, stampSize = fi.ModTime().UnixMilli(), fi.Size()
+			}
+		}
 		var entries []json.RawMessage
 		var err error
 		if maxBytes < 0 {
@@ -151,7 +188,7 @@ func (m *Manager) handleSessionREST(w http.ResponseWriter, r *http.Request, rest
 			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "entries": entries, "state": st, "model_ref": m.SessionModelRef(id)})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "entries": entries, "state": st, "model_ref": m.SessionModelRef(id), "updated_at": stampAt, "size_bytes": stampSize})
 	case action == "title" && r.Method == http.MethodPost:
 		var body struct {
 			Title string `json:"title"`

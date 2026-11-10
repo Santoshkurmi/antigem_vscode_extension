@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { QuotaWindowView } from '../../../shared/protocol';
 import { countdownText } from '../agy/quota';
+import { remainingText } from '../agy/settingsKit';
 
 export type J = Record<string, any>;
 
@@ -147,11 +148,11 @@ export function windowLabel(minutes: number | null): string {
 export function quotaWindows(limits: RateLimits | null): QuotaWindowView[] {
   return [limits?.primary, limits?.secondary]
     .filter((w): w is LimitWindow => w != null)
-    .map((w) => ({
-      label: windowLabel(w.windowMinutes),
-      remaining: Math.max(0, Math.min(1, 1 - w.usedPercent / 100)),
-      resetText: countdownText(w.resetsAt != null ? w.resetsAt * 1000 : null),
-    }));
+    .map((w) => {
+      const remaining = Math.max(0, Math.min(1, 1 - w.usedPercent / 100));
+      // share left in whole percents ("72%"), as the app's codexQuotaWindows (oneDecimal = false)
+      return { label: windowLabel(w.windowMinutes), remaining, resetText: countdownText(w.resetsAt != null ? w.resetsAt * 1000 : null), text: remainingText(remaining, false) };
+    });
 }
 
 export const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);

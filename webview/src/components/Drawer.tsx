@@ -3,11 +3,13 @@
 // "Show N more"), each row with its agent-tinted icon, running dot, relative time and ⋮ menu.
 import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from 'solid-js';
 import type { AgentKind, Conversation } from '@shared/model';
-import { conversationAction, enabledAgents, openConversation, setUi, state } from '../state/store';
+import { conversationAction, enabledAgents, openConversation, send, setUi, state } from '../state/store';
 import { openSettings, setThemePanelOpen, themePanelOpen } from '../state/settings';
 import { Collapse, Dialog, DropdownMenu, Icon, type MenuItem } from '../ui/primitives';
 import { SearchChatsDialog, setSearchDialogOpen, splitMatch, useDeepSearch } from './SearchChats';
 import { AccountsButton } from './Accounts';
+import { JARVIS_CYAN, JarvisBot } from './JarvisBot';
+import { jarvis, jarvisAction, setJarvisPanelOpen } from '../state/jarvis';
 import { exportChat } from '../state/exportFlow';
 import { agentAccent, agentChipLabel, alpha, relativeTime, workspaceName } from '../util/format';
 
@@ -18,7 +20,7 @@ interface TreeItem {
   expanded: boolean;
 }
 
-export function Drawer(props: { open: boolean; onClose: () => void }) {
+export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: () => void }) {
   const [searchOpen, setSearchOpen] = createSignal(false);
   const [query, setQuery] = createSignal('');
   const [expandedParents, setExpandedParents] = createSignal<Set<string>>(new Set());
@@ -33,7 +35,10 @@ export function Drawer(props: { open: boolean; onClose: () => void }) {
     const base = state.agents.length ? enabledAgents() : [...new Set(state.conversations.map((c) => c.agent))];
     return (['AGY', 'CLAUDE', 'OPENCODE', 'CODEX'] as AgentKind[]).filter((a) => base.includes(a));
   });
-  const filter = () => (state.ui.agentFilter && visibleAgents().includes(state.ui.agentFilter) ? state.ui.agentFilter : null);
+  // the Jarvis tab (ChatHistoryDrawer's jarvisFilter): only while Jarvis is on
+  const [jarvisTab, setJarvisTab] = createSignal(false);
+  const jarvisOn = () => jarvisTab() && jarvis.enabled;
+  const filter = () => (jarvisOn() ? null : state.ui.agentFilter && visibleAgents().includes(state.ui.agentFilter) ? state.ui.agentFilter : null);
 
   // archived chats, sub-agents included when an ancestor is archived
   const archivedIds = createMemo(() => {
@@ -59,6 +64,8 @@ export function Drawer(props: { open: boolean; onClose: () => void }) {
     const a = filter();
     const q = query().trim().toLowerCase();
     return state.conversations
+      // the Jarvis tab lists Jarvis chats; All and the agent tabs leave out the ones the host hides (listMode)
+      .filter((c) => (jarvisOn() ? !!c.isJarvis : !c.jarvisHidden))
       .filter((c) => (a ? c.agent === a : true))
       .filter((c) => archivedIds().has(c.id) === state.ui.showArchived)
       .filter((c) => !q || c.title.toLowerCase().includes(q) || (c.subagentRole ?? '').toLowerCase().includes(q))
@@ -220,6 +227,10 @@ export function Drawer(props: { open: boolean; onClose: () => void }) {
               active={state.ui.showArchived}
               onClick={() => setUi('showArchived', !state.ui.showArchived)}
             />
+            {/* turn AntiGem off (the host asks first): its servers and agents stop; Reconnect starts them again */}
+            <button class="header-round power" title="Turn off AntiGem" onClick={() => send({ type: 'powerOff' })}>
+              <Icon name="power" size={19} />
+            </button>
           </div>
 
           <Collapse when={searchOpen() || !!query()}>
@@ -265,24 +276,44 @@ export function Drawer(props: { open: boolean; onClose: () => void }) {
 
           <div style={{ height: '10px', 'flex-shrink': 0 }} />
 
-          <Show when={visibleAgents().length > 1}>
+          <Show when={visibleAgents().length > 1 || jarvis.enabled}>
             <div class="filter-chips">
               <For each={[null, ...visibleAgents()] as (AgentKind | null)[]}>
                 {(a) => {
-                  const on = () => filter() === a;
+                  const on = () => !jarvisOn() && filter() === a;
                   return (
                     <button
                       class="filter-chip"
                       classList={{ on: on() }}
                       style={{ '--accent': a ? agentAccent(a) : 'var(--primary)' }}
-                      onClick={() => setUi('agentFilter', a)}
+                      onClick={() => {
+                        setJarvisTab(false);
+                        setUi('agentFilter', a);
+                      }}
                     >
                       {a ? agentChipLabel(a) : 'All'}
                     </button>
                   );
                 }}
               </For>
+              <Show when={jarvis.enabled}>
+                <button class="filter-chip jarvis-chip" classList={{ on: jarvisOn() }} style={{ '--accent': JARVIS_CYAN }} onClick={() => setJarvisTab(true)}>
+                  <JarvisBot size={15} color={jarvisOn() ? JARVIS_CYAN : `color-mix(in srgb, ${JARVIS_CYAN} 70%, transparent)`} />
+                  Jarvis
+                </button>
+              </Show>
             </div>
+          </Show>
+          {/* the Jarvis tab's "New Jarvis chat" (JarvisNewChatRow) */}
+          <Show when={jarvisOn() && !state.ui.showArchived}>
+            <button class="jarvis-new-row" onClick={() => (jarvisAction('newChat'), props.onClose())}>
+              <JarvisBot size={26} color={JARVIS_CYAN} active />
+              <span class="jarvis-new-text">
+                <span class="jarvis-new-title">New Jarvis chat</span>
+                <span class="jarvis-new-sub">Any agent and model. Give it a big job: it plans, runs teams of agents and keeps going</span>
+              </span>
+              <Icon name="add" size={24} color={JARVIS_CYAN} />
+            </button>
           </Show>
 
           <Show when={state.ui.showArchived}>
@@ -306,7 +337,9 @@ export function Drawer(props: { open: boolean; onClose: () => void }) {
                     ? `No ${state.ui.showArchived ? 'archived ' : ''}chats found matching "${query()}"`
                     : state.ui.showArchived
                       ? 'No archived chats. Archive a chat from its ⋮ menu to keep it here, out of the main list.'
-                      : 'No recent chats'}
+                      : jarvisOn()
+                        ? "No Jarvis chats yet. Start one above: type a big job and Jarvis plans it, runs it with teams of agents and keeps going until it's done."
+                        : 'No recent chats'}
                 </div>
               </Match>
               <Match when={listState() === 'content' && !state.ui.groupByWorkspace}>
@@ -395,6 +428,16 @@ export function Drawer(props: { open: boolean; onClose: () => void }) {
             <button class="footer-btn" classList={{ on: themePanelOpen() }} title="Themes" onClick={() => setThemePanelOpen(!themePanelOpen())}>
               <Icon name="palette" size={20} />
             </button>
+            {/* Notes & to-do lists (the app's floating switcher entry) */}
+            <button class="footer-btn" title="Notes" onClick={() => props.onNotes?.()}>
+              <Icon name="edit_note" size={21} />
+            </button>
+            {/* the Jarvis panel (tasks, activity, stop all) while Jarvis is on */}
+            <Show when={jarvis.enabled}>
+              <button class="footer-btn" title="Jarvis" onClick={() => (props.onClose(), setJarvisPanelOpen(true))}>
+                <JarvisBot size={21} color={JARVIS_CYAN} active={jarvis.anyActive} />
+              </button>
+            </Show>
             <span class="flex1" />
             <AccountsButton />
           </div>
@@ -523,12 +566,19 @@ function ChatRow(props: { item: TreeItem; onSelect: () => void; onToggle: () => 
       classList={{ selected: selected(), sub: sub() }}
       style={{ 'margin-left': sub() ? `${12 + props.item.depth * 14}px` : undefined }}
       onClick={props.onSelect}
-      title={c().title}
+      title={c().subagentTypeName ? `${c().subagentRole || c().title} · ${c().subagentTypeName}` : c().title}
     >
       <span class="chat-row-icon">
         <Show
           when={sub()}
-          fallback={<Icon name={c().cloudProjectId ? 'cloud' : 'chat_bubble'} size={17} color={c().cloudProjectId ? alpha('var(--info)', selected() ? 1 : 0.85) : iconColor()} />}
+          fallback={
+            <Show
+              when={c().isJarvis}
+              fallback={<Icon name={c().cloudProjectId ? 'cloud' : 'chat_bubble'} size={17} color={c().cloudProjectId ? alpha('var(--info)', selected() ? 1 : 0.85) : iconColor()} />}
+            >
+              <JarvisBot size={19} color={selected() ? JARVIS_CYAN : `color-mix(in srgb, ${JARVIS_CYAN} 85%, transparent)`} />
+            </Show>
+          }
         >
           <Icon name="call_split" size={15} color={selected() ? 'var(--primary)' : alpha('var(--on-surface-variant)', 0.7)} />
         </Show>

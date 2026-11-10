@@ -31,7 +31,22 @@ function buildPages(enabled: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'
       id: 'root',
       title: 'Settings',
       sections: [
-        { id: 'agents', title: '', items: [{ kind: 'page', id: 'agents', label: 'Agents', icon: 'smart_toy', description: `${enabled.length} on` }] },
+        {
+          id: 'agents',
+          title: '',
+          items: [
+            { kind: 'page', id: 'agents', label: 'Agents', icon: 'smart_toy', description: `${enabled.length} enabled` },
+            ...enabled.map((a) =>
+              a === 'AGY'
+                ? { kind: 'page' as const, id: 'agy', label: 'Antigravity', icon: 'rocket_launch', description: 'agy 1.5.2' }
+                : a === 'CLAUDE'
+                  ? { kind: 'page' as const, id: 'claude', label: 'Claude Code', icon: 'auto_awesome', description: 'Max · 2.4.1' }
+                  : a === 'CODEX'
+                    ? { kind: 'page' as const, id: 'codex', label: 'Codex', icon: 'terminal', description: 'Plus · 0.48' }
+                    : { kind: 'page' as const, id: 'opencode', label: 'OpenCode', icon: 'code', description: '1.0.3' },
+            ),
+          ],
+        },
         {
           id: 'chat',
           title: '',
@@ -67,17 +82,15 @@ function buildPages(enabled: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'
           ],
         },
         {
-          id: 'pages',
+          id: 'cli',
           title: '',
-          items: enabled.map((a) =>
-            a === 'AGY'
-              ? { kind: 'page' as const, id: 'agy', label: 'Antigravity', icon: 'rocket_launch', description: 'agy 1.5.2' }
-              : a === 'CLAUDE'
-                ? { kind: 'page' as const, id: 'claude', label: 'Claude Code', icon: 'auto_awesome', description: 'Max · 2.4.1' }
-                : a === 'CODEX'
-                  ? { kind: 'page' as const, id: 'codex', label: 'Codex', icon: 'terminal', description: 'Plus · 0.48' }
-                  : { kind: 'page' as const, id: 'opencode', label: 'OpenCode', icon: 'code', description: '1.0.3' },
-          ),
+          items: [
+            { kind: 'text', id: 'cli.agy', label: 'Antigravity CLI (agy)', description: 'Empty = found on PATH', value: '~/.local/bin/agy', placeholder: 'auto-detect' },
+            { kind: 'text', id: 'cli.claude', label: 'Claude Code CLI (claude)', value: '~/.local/bin/claude', placeholder: 'auto-detect' },
+            { kind: 'text', id: 'cli.codex', label: 'Codex CLI (codex)', value: '/usr/local/bin/codex', placeholder: 'auto-detect' },
+            { kind: 'text', id: 'cli.opencode', label: 'OpenCode CLI (opencode)', value: '', placeholder: '~/.opencode/bin/opencode' },
+            { kind: 'button', id: 'restart', label: 'Restart bridge to apply', style: 'primary' },
+          ],
         },
       ],
     },
@@ -106,8 +119,8 @@ function buildPages(enabled: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'
               id: 'agy.quota',
               label: 'Usage limits',
               groups: [
-                { name: 'Gemini', windows: [{ label: '5h', remaining: 0.42, resetText: 'in 3h 5m' }, { label: 'Weekly', remaining: 0.81, resetText: 'Tue 09:00' }] },
-                { name: 'Claude & GPT', windows: [{ label: '5h', remaining: 0.06, resetText: 'in 58m' }] },
+                { name: 'Gemini', windows: [{ label: '5h', remaining: 0.488, resetText: 'in 3h 5m', text: '48.8%' }, { label: 'Weekly', remaining: 0.81, resetText: 'Tue 09:00', text: '81.0%' }] },
+                { name: 'Claude & GPT', windows: [{ label: '5h', remaining: 0.06, resetText: 'in 58m', text: '6.2%' }] },
               ],
             },
           ],
@@ -145,6 +158,37 @@ function buildPages(enabled: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'
       id: 'agy.mcp',
       title: 'MCP servers',
       sections: [
+        {
+          id: 'presets',
+          title: '',
+          agent: 'AGY',
+          items: [
+            {
+              kind: 'presets',
+              id: 'mcp.presets',
+              label: 'Add a server',
+              description: 'Built-in tools and popular servers, one tap to add',
+              tiles: [
+                { id: 'plugin', name: 'Custom Plugin MCP', subtitle: 'Pick an installed plugin', icon: 'extension', accent: 'primary' },
+                { id: 'developer', name: 'Plugin Developer', subtitle: 'Build & test AntiGem plugins', icon: 'developer_mode', accent: '#9B6BDF' },
+                { id: 'browser', name: 'Browser', subtitle: 'Control the in-app browser', icon: 'language', accent: 'info', added: true },
+                { id: 'notes', name: 'Notes & To-dos', subtitle: 'Read & edit your notes', icon: 'edit_note', accent: 'warning' },
+                { id: 'jarvis', name: 'Jarvis', subtitle: 'Voice control of this app', icon: 'record_voice_over', accent: 'accent-teal', disabled: true },
+                { id: 'theme', name: 'Theme', subtitle: 'Create & switch app themes', icon: 'palette', accent: 'accent-alt' },
+                {
+                  id: 'stitch',
+                  name: 'Stitch',
+                  subtitle: 'Google Stitch UI design · API key',
+                  icon: 'palette',
+                  accent: 'accent-pink',
+                  form: [{ id: 'apiKey', label: 'Stitch API key', kind: 'password', placeholder: 'AIza…', required: true }],
+                },
+                { id: 'flow', name: 'Google Flow', subtitle: 'Video generation with Veo', icon: 'movie', accent: '#4285F4' },
+                { id: 'custom', name: 'Custom server', subtitle: 'Command or URL of your own', icon: 'add', accent: 'success' },
+              ],
+            },
+          ],
+        },
         {
           id: 'servers',
           title: 'Tools Antigravity can call',
@@ -340,10 +384,28 @@ function buildPages(enabled: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'
             { kind: 'text', id: 'dictation', label: 'Dictation language', description: 'Language code for voice input (e.g. en, es, de, ja)', value: 'en' },
           ],
         },
+        {
+          id: 'advanced',
+          title: '',
+          agent: 'CLAUDE',
+          items: [
+            {
+              kind: 'text',
+              id: 'settings.json',
+              label: 'settings.json',
+              description: '~/.claude/settings.json, shared with the terminal CLI',
+              multiline: true,
+              code: true,
+              rows: 24,
+              value: JSON.stringify({ model: 'opus', permissions: { allow: ['Bash(npm test:*)', 'Read(~/projects/**)'], deny: ['Bash(rm -rf:*)'] }, env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000' }, includeCoAuthoredBy: false, statusLine: { type: 'command', command: '~/.claude/statusline.sh' } }, null, 2),
+            },
+            { kind: 'page', id: 'claude.mcp', label: 'MCP servers', icon: 'hub', badge: '3' },
+          ],
+        },
       ],
     },
     opencode: { id: 'opencode', title: 'OpenCode', sections: [{ id: 'oc', title: '', agent: 'OPENCODE', items: [{ kind: 'info', id: 'state', label: 'State', value: 'Running · opencode 1.0.3', tone: 'ok' }] }] },
-    codex: { id: 'codex', title: 'Codex', sections: [{ id: 'cx', title: '', agent: 'CODEX', items: [{ kind: 'info', id: 'acct', label: 'ChatGPT', value: 'dev@example.com · Plus', tone: 'ok' }] }] },
+    codex: { id: 'codex', title: 'Codex', sections: [{ id: 'cx', title: '', agent: 'CODEX', items: [{ kind: 'info', id: 'acct', label: 'ChatGPT', value: 'dev@example.com · Plus', tone: 'ok' }, { kind: 'button', id: 'codex.signin', label: 'Sign in again' }] }, { id: 'cx-links', title: '', agent: 'CODEX', items: [{ kind: 'page', id: 'codex.mcp', label: 'MCP servers', icon: 'hub' }] }] },
     slash: {
       id: 'slash',
       title: 'Custom slash commands',
@@ -403,6 +465,13 @@ export function createMockSettings(post: Post) {
 
   const sendPage = (id: string, delay = 120) => {
     const p = pages[id];
+    // a page the agent cannot build right now: the error state with Retry
+    if (id === 'codex.mcp') {
+      setTimeout(() => post({ type: 'settings', page: { id, title: 'MCP servers', sections: [], error: 'Codex is not running, so its MCP servers cannot be listed. Start Codex, then retry.' } }), delay);
+      return;
+    }
+    // a page that never comes (the view gives up after 15 s)
+    if (id === 'claude.mcp') return;
     if (!p) {
       setTimeout(() => post({ type: 'settings', page: { id, title: id, sections: [{ id: 'none', title: 'Not available', items: [{ kind: 'info', id: 'x', label: 'This page', value: 'is not in the mock', tone: 'muted' }] }] } }), delay);
       return;
@@ -449,7 +518,7 @@ export function createMockSettings(post: Post) {
             if (m.id === 'agents.enabled') {
               // the agent page links follow the enabled agents
               const fresh = buildPages(it.values as AgentKind[]);
-              pages.agents.sections[1] = fresh.agents.sections[1];
+              pages.root.sections[0] = fresh.root.sections[0];
               pages.root.sections[0] = fresh.root.sections[0];
               sendPage('root', 150);
             }
@@ -458,7 +527,19 @@ export function createMockSettings(post: Post) {
           return true;
         }
         case 'settingAction': {
+          // every action ends with settingDone (the view shows "Signing in…" until then)
+          setTimeout(() => post({ type: 'settingDone', page: m.page, id: m.id, rowId: m.rowId ?? null, actionId: m.actionId ?? null, ok: m.id !== 'agy.plan' }), m.id === 'reinstall' ? 3200 : 1400);
+          if (m.id === 'agy.plan') setTimeout(() => toast('Could not open the plan page: the hub did not answer', 'error'), 1400);
           const it = findItem(m.page, m.id);
+          if (it?.kind === 'presets') {
+            const t = it.tiles.find((x) => x.id === m.actionId);
+            if (t) setTimeout(() => {
+              t.added = !t.added;
+              toast(t.added ? `Added ${t.name}${m.values?.apiKey ? ' (key saved)' : ''}` : `Removed ${t.name}`);
+              sendPage(m.page, 0);
+            }, 1000);
+            return true;
+          }
           if (it?.kind === 'list') {
             if (m.actionId === 'add' && m.values) {
               const name = m.values.name || m.values.pattern || 'new';

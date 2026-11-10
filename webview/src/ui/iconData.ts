@@ -85,6 +85,11 @@ import i_paid from '@material-design-icons/svg/outlined/paid.svg?raw';
 import i_broken_image from '@material-design-icons/svg/outlined/broken_image.svg?raw';
 import i_zoom_in from '@material-design-icons/svg/outlined/zoom_in.svg?raw';
 import i_zoom_out from '@material-design-icons/svg/outlined/zoom_out.svg?raw';
+import i_developer_mode from '@material-design-icons/svg/outlined/developer_mode.svg?raw';
+import i_record_voice_over from '@material-design-icons/svg/outlined/record_voice_over.svg?raw';
+import i_phone_android from '@material-design-icons/svg/outlined/phone_android.svg?raw';
+import i_bug_report from '@material-design-icons/svg/outlined/bug_report.svg?raw';
+import i_movie from '@material-design-icons/svg/outlined/movie.svg?raw';
 import i_auto_mode from '@material-design-icons/svg/outlined/auto_mode.svg?raw';
 import i_timer from '@material-design-icons/svg/outlined/timer.svg?raw';
 import i_data_usage from '@material-design-icons/svg/outlined/data_usage.svg?raw';
@@ -131,7 +136,7 @@ import i_format_size from '@material-design-icons/svg/outlined/format_size.svg?r
 import i_workspaces from '@material-design-icons/svg/outlined/workspaces.svg?raw';
 import i_check_circle_o from '@material-design-icons/svg/outlined/check_circle.svg?raw';
 import i_add_circle from '@material-design-icons/svg/outlined/add_circle.svg?raw';
-import i_power from '@material-design-icons/svg/outlined/power_settings_new.svg?raw';
+import i_power from '@material-design-icons/svg/filled/power_settings_new.svg?raw';
 import i_download from '@material-design-icons/svg/outlined/download.svg?raw';
 import i_upload from '@material-design-icons/svg/outlined/upload.svg?raw';
 import i_edit_note from '@material-design-icons/svg/outlined/edit_note.svg?raw';
@@ -280,6 +285,11 @@ const raw = {
   broken_image: i_broken_image,
   zoom_in: i_zoom_in,
   zoom_out: i_zoom_out,
+  developer_mode: i_developer_mode,
+  record_voice_over: i_record_voice_over,
+  phone_android: i_phone_android,
+  bug_report: i_bug_report,
+  movie: i_movie,
   auto_mode: i_auto_mode,
   timer: i_timer,
   data_usage: i_data_usage,
@@ -305,3 +315,6 @@ export function iconPaths(name: IconName): string {
   }
   return s;
 }
+
+/** Whether a Material icon name (from the host) is bundled. */
+export const hasIcon = (name: string): name is IconName => Object.prototype.hasOwnProperty.call(raw, name);

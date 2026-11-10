@@ -49,7 +49,7 @@ import {
   type J,
   type RateLimits,
 } from './util';
-import { quotaPercentText } from '../agy/quota';
+import { remainingText } from '../agy/settingsKit';
 
 const EMIT_INTERVAL_MS = 33;
 const SOURCES = ['cli', 'vscode', 'exec', 'appServer'];
@@ -357,12 +357,12 @@ export class CodexBackend implements AgentBackend {
         detail = 'Starting… waiting for the bridge.';
         break;
       case 'SIGNED_OUT':
-        detail = 'Sign in with your ChatGPT account to use Codex (Settings → Agents → Codex).';
+        detail = 'Sign in with your ChatGPT account to use Codex (Settings → Codex → Account & CLI).';
         break;
       case 'NOT_INSTALLED':
         detail = this.bridgeStatus?.termux_package
-          ? 'Codex is not installed yet (pkg install codex). Settings → Codex can install it.'
-          : 'Codex is not installed yet. Settings → Codex can install it.';
+          ? 'Codex is not installed yet (pkg install codex). Install it from Settings → Codex → Account & CLI.'
+          : 'Codex is not installed yet. Install it from Settings → Codex → Account & CLI.';
         break;
       case 'DISABLED':
         detail = 'The bridge was started with Codex off.';
@@ -376,7 +376,16 @@ export class CodexBackend implements AgentBackend {
       default:
         detail = this.bridgeStatus?.error ?? STATE_LABEL[st];
     }
-    return { kind: 'CODEX', label: 'Codex', state, detail, account: this.account?.email ?? null };
+    return {
+      kind: 'CODEX',
+      label: 'Codex',
+      state,
+      detail,
+      account: this.account?.email ?? null,
+      version: this.bridgeStatus?.installed && version ? version.replace(/^v/, '') : null,
+      plan: this.account?.plan ? capitalize(this.account.plan) : null,
+      setupPage: 'codex.cli',
+    };
   }
 
   /** The host's toasts (the app's `toasts` flow). */
@@ -613,7 +622,7 @@ export class CodexBackend implements AgentBackend {
     const shortest = windows[0] ?? null;
     const longest = windows.length > 1 ? windows[windows.length - 1] : shortest;
     const win = pill === '7d' ? longest : shortest;
-    const quotaText = win ? `${win.label === '5h' ? '' : `${win.label} `}${quotaPercentText(win.remaining)}` : null;
+    const quotaText = win ? `${win.label === '5h' ? '' : `${win.label} `}${remainingText(win.remaining, false)}` : null;
     const models = this.modelList.map((m) => ({
       ...m,
       group: windows.length ? QUOTA_GROUP : null,
@@ -1815,6 +1824,22 @@ export class CodexBackend implements AgentBackend {
 
   removeMcp(name: string) {
     return this.writeMcp(name, null);
+  }
+
+  /** Writes a server's whole entry (an edit keeps the fields the form does not show). */
+  putMcp(name: string, value: J) {
+    return this.writeMcp(name, value);
+  }
+
+  /** Switches a server on or off in Codex's config (`enabled`), for every Codex chat. */
+  async setMcpEnabled(name: string, enabled: boolean) {
+    await this.client.rpc('config/batchWrite', { edits: [{ keyPath: `mcp_servers.${name}.enabled`, value: enabled, mergeStrategy: 'replace' }], reloadUserConfig: true }, 30_000);
+    await this.client.rpc('config/mcpServer/reload', {}, 30_000).catch(() => undefined);
+  }
+
+  /** Reconnects the MCP servers (Codex reloads them all). */
+  async reloadMcp() {
+    await this.client.rpc('config/mcpServer/reload', {}, 30_000);
   }
 
   // ------------------------------------------------------------------ events

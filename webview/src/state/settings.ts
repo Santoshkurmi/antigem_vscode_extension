@@ -29,8 +29,37 @@ export const [settings, setSettings] = createStore<SettingsState>({ open: false,
 /** The floating theme switcher (ThemeQuickPanel). */
 export const [themePanelOpen, setThemePanelOpen] = createSignal(false);
 
+// a button / row action runs until the host says it is done (settingDone): its key → started at
+const [busy, setBusy] = createStore<Record<string, number>>({});
+const busyKey = (page: string, id: string, rowId?: string | null, actionId?: string | null) => `${page}|${id}|${rowId ?? ''}|${actionId ?? ''}`;
+/** True while an action of this page / item (/ row / action) waits for its settingDone. */
+export function isBusy(page: string, id: string, rowId?: string | null, actionId?: string | null): boolean {
+  return !!busy[busyKey(page, id, rowId, actionId)];
+}
+
+// when each page was asked for (no answer after 15 s: an error with Retry instead of an endless spinner)
+const [requestedAt, setRequestedAt] = createStore<Record<string, number>>({});
+export const pageRequestedAt = (id: string) => requestedAt[id] ?? 0;
+function requestPage(id: string) {
+  setRequestedAt(id, Date.now());
+  host.send({ type: 'requestSettings', page: id });
+}
+/** Ask for a page again (its Retry button). */
+export function retryPage(id: string) {
+  setSettings('pages', id, undefined!);
+  requestPage(id);
+}
+
 host.onMessage((m) => {
   if (m.type === 'settings') setSettings('pages', m.page.id, reconcile(m.page, { key: 'id', merge: false }));
+  else if (m.type === 'settingDone') {
+    const exact = busyKey(m.page, m.id, m.rowId, m.actionId);
+    batch(() => {
+      if (busy[exact]) setBusy(exact, undefined!);
+      // an answer without the row / action ends every action of that item
+      else for (const k of Object.keys(busy)) if (k.startsWith(`${m.page}|${m.id}|`)) setBusy(k, undefined!);
+    });
+  }
 });
 
 const isLocal = (id: string) => id.startsWith('local:');
@@ -41,8 +70,8 @@ export function openSettings(page?: StackEntry, deeper: StackEntry[] = []) {
   batch(() => {
     setSettings({ open: true, dir: 'fwd', stack: [{ id: 'root', title: 'Settings' }, ...pages] });
   });
-  host.send({ type: 'requestSettings', page: 'root' });
-  for (const p of pages) if (!isLocal(p.id)) host.send({ type: 'requestSettings', page: p.id });
+  requestPage('root');
+  for (const p of pages) if (!isLocal(p.id)) requestPage(p.id);
 }
 
 /** An agent's own settings page, under Settings → Agents (Install / Sign in / Restart live there). */
@@ -66,7 +95,7 @@ export function pushPage(entry: StackEntry) {
     setSettings('dir', 'fwd');
     setSettings('stack', (s) => [...s, entry]);
   });
-  if (!isLocal(entry.id)) host.send({ type: 'requestSettings', page: entry.id });
+  if (!isLocal(entry.id)) requestPage(entry.id);
 }
 
 export function popPage() {
@@ -79,7 +108,7 @@ export function popPage() {
     setSettings('stack', (s) => s.slice(0, -1));
   });
   const top = settings.stack[settings.stack.length - 1];
-  if (top && !isLocal(top.id)) host.send({ type: 'requestSettings', page: top.id });
+  if (top && !isLocal(top.id)) requestPage(top.id);
 }
 
 function patchItem(pageId: string, itemId: string, fn: (item: SettingItem) => void) {
@@ -107,7 +136,22 @@ export function changeSetting(pageId: string, itemId: string, value: unknown, ro
 }
 
 export function settingAction(pageId: string, itemId: string, opts: { rowId?: string; actionId?: string; values?: Record<string, string> } = {}) {
+  const key = busyKey(pageId, itemId, opts.rowId, opts.actionId);
+  setBusy(key, Date.now());
+  // an older host never answers: stop spinning after a minute
+  setTimeout(() => busy[key] && setBusy(key, undefined!), 60_000);
   host.send({ type: 'settingAction', page: pageId, id: itemId, ...opts });
+}
+
+/** "Sign in" → "Signing in…" (the label a button shows while its action runs). */
+export function busyLabel(label: string): string {
+  const [first, ...rest] = label.trim().split(' ');
+  const special: Record<string, string> = { sign: 'Signing', log: 'Logging', set: 'Setting', run: 'Running', stop: 'Stopping', add: 'Adding', get: 'Getting', check: 'Checking' };
+  const w = first.toLowerCase();
+  let g = special[w];
+  if (!g) g = /[^e]e$/.test(w) ? w.slice(0, -1) + 'ing' : w + 'ing';
+  g = g.charAt(0).toUpperCase() + g.slice(1);
+  return [g, ...rest].join(' ') + '…';
 }
 
 /** A shared view preference: applied here at once, saved by the host (which broadcasts uiPrefs to every view). */

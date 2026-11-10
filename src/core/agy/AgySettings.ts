@@ -1,15 +1,55 @@
-// Antigravity's settings pages (ports of the app's Antigravity settings: Commands & Permissions with project
-// overrides, MCP Servers + the Cascade MCP catalog, Skills & Plugins with scopes and the store, Antigravity CLI,
-// account + usage limits). Everything goes to the hub (gRPC) or the bridge.
+// Antigravity's settings pages (ports of the app's Antigravity settings: Account & CLI — agy install / update, the
+// Google account and usage limits —, MCP Servers + the Cascade MCP catalog, Skills & Plugins with scopes and the store,
+// Commands & Permissions with project overrides). Everything goes to the hub (gRPC) or the bridge, with timeouts: a
+// page whose hub is down says so at once instead of waiting.
 //
 // Writes to the hub's settings never encode a decoded config: they patch the hub's own stored bytes (patchMessage),
 // so fields this proto copy does not know, and explicit false / 0 values, stay exactly as they were.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { SettingFormField, SettingItem, SettingListRow, SettingsPage } from '../../../shared/protocol';
+import type { SettingFormField, SettingItem, SettingListRow, SettingsPage, SettingsSection } from '../../../shared/protocol';
 import type { AgentSettingsProvider } from '../types';
 import type { AgyBackend } from './AgyBackend';
 import { applyQuota } from './quota';
 import { decodeAs, encodeAs, lengthDelimited, patchMessage, rawFields } from './proto';
+import {
+  MCP_EDIT,
+  MCP_LIST,
+  MCP_PRESETS,
+  MCP_RECONNECT,
+  MCP_REFRESH_ALL,
+  MCP_REMOVE,
+  blockedReason,
+  joinCommand,
+  mcpForm,
+  mcpFormValues,
+  mcpPage,
+  mcpSummary,
+  presetHeaders,
+  presetTap,
+  presetsItem,
+  timeoutSignal,
+  unavailablePage,
+  withTimeout,
+  type McpServerView,
+  type McpState,
+} from './settingsKit';
+
+/** A settings page waits this long for a hub that is still starting, then says it is down. */
+const WAIT_ONLINE_MS = 3_000;
+/** One hub read of a settings page. */
+const HUB_READ_MS = 8_000;
+/** One hub write. */
+const HUB_WRITE_MS = 20_000;
+/** One bridge read (agy CLI, MCP config). */
+const BRIDGE_READ_MS = 6_000;
+
+const TITLES: Record<string, string> = {
+  'agy.cli': 'Account & CLI',
+  'agy.permissions': 'Commands & Permissions',
+  'agy.mcp': 'MCP Servers',
+  'agy.mcp.catalog': 'MCP catalog',
+  'agy.skills': 'Skills & Plugins',
+};
 
 const AUTO_OFF = 'CASCADE_COMMANDS_AUTO_EXECUTION_OFF';
 const AUTO_SMART = 'CASCADE_COMMANDS_AUTO_EXECUTION_AUTO';
@@ -95,8 +135,9 @@ export class AgySettings implements AgentSettingsProvider {
   private rawUserConfig: Uint8Array | null = null; // the UserConfig's exact bytes: writes patch these
   private auth: Auth | null = null;
   private authLoading: Promise<void> | null = null;
+  private authTriedAt = 0;
   private signingIn: { url: string; started: number } | null = null;
-  private mcp: { states: any[]; configPath: string; config: any } | null = null;
+  private mcp: { states: any[]; configPath: string; config: any; error: string | null; configRead: boolean } | null = null;
   private catalog: { query: string; plugins: any[]; error: string | null } | null = null;
   private skillScope: 'GLOBAL' | 'WORKSPACE' | 'ALL' = 'GLOBAL';
   private skills: any[] | null = null;
@@ -104,6 +145,9 @@ export class AgySettings implements AgentSettingsProvider {
   private store: any[] | null = null;
   private projects: ProjectRow[] | null = null;
   private cli: any = null;
+  private cliLoading: Promise<void> | null = null;
+  private cliTriedAt = 0;
+  private summariesTriedAt = 0;
   private loginPoll: NodeJS.Timeout | null = null;
   private cliPoll: NodeJS.Timeout | null = null;
 
@@ -120,22 +164,73 @@ export class AgySettings implements AgentSettingsProvider {
     return e instanceof Error ? e.message : String(e);
   }
 
-  // ------------------------------------------------------------------ account (also used by the backend)
+  // ------------------------------------------------------------------ hub & bridge access (with timeouts)
+
+  /** Why the hub can't be asked now (what a page or a button says). */
+  private downReason(): string {
+    return blockedReason(this.b.status()) ?? "Antigravity isn't running";
+  }
+
+  /** The hub answers (waits a little for one that is starting); otherwise fails at once with the reason. */
+  private async online(): Promise<void> {
+    if (!(await this.b.waitOnline(WAIT_ONLINE_MS))) throw new Error(this.downReason());
+  }
+
+  private async hub<T = any>(name: string, req: object, timeoutMs = HUB_READ_MS): Promise<T> {
+    await this.online();
+    return this.b.callHub<T>(name, req, timeoutMs);
+  }
+
+  private async hubRaw(name: string, request: Uint8Array, timeoutMs = HUB_WRITE_MS): Promise<Buffer> {
+    await this.online();
+    return this.b.callHubRaw(name, request, timeoutMs);
+  }
+
+  private async rpc() {
+    await this.online();
+    return this.b.rpcReady();
+  }
+
+  private bridge<T = any>(p: string, init: RequestInit = {}, timeoutMs = BRIDGE_READ_MS): Promise<T> {
+    return this.b.bridgeJson<T>(p, { ...init, signal: init.signal ?? timeoutSignal(timeoutMs) });
+  }
+
+  // ------------------------------------------------------------------ account & CLI (also used by the backend)
 
   /** true / false once known, null while unknown (the hub not asked yet). */
   signedIn(): boolean | null {
     return this.auth ? this.auth.loggedIn : null;
   }
 
-  /** The account line of the agent status (name / email). */
+  /** The account line of the agent status (email, else name). */
   accountLabel(): string | null {
     if (!this.auth?.loggedIn) return null;
     return this.auth.email || this.auth.name || null;
   }
 
+  /** The subscription ("Google AI Pro"): the user tier, else the plan name (the app's Accounts dialog). */
+  planLabel(): string | null {
+    if (!this.auth?.loggedIn) return null;
+    return this.auth.tier || this.auth.plan || null;
+  }
+
+  /** agy installed (the bridge's check): true / false, null while unknown or the check failed. */
+  cliInstalled(): boolean | null {
+    if (!this.cli || this.cli.error) return null;
+    return this.cli.installed === true;
+  }
+
+  /** "1.5.4" (the version part of `agy --version`), as the app's Accounts dialog. */
+  cliVersion(): string | null {
+    if (!this.cli?.installed) return null;
+    const v = String(this.cli.version ?? '').trim();
+    return v.match(/\d+(\.\d+)+\S*/)?.[0] ?? (v || null);
+  }
+
   /** Reads the account again (hub online, a send while signed out). */
   refreshAuth(): Promise<void> {
     if (!this.authLoading) {
+      this.authTriedAt = Date.now();
       this.authLoading = this.loadAuth().finally(() => {
         this.authLoading = null;
       });
@@ -143,20 +238,26 @@ export class AgySettings implements AgentSettingsProvider {
     return this.authLoading;
   }
 
+  /** Pages that show the account read it once the hub runs (not again and again when that fails). */
+  private ensureAuth() {
+    if (!this.auth && this.b.status().state === 'online' && Date.now() - this.authTriedAt > 15_000) void this.refreshAuth();
+  }
+
   /** The hub's command auto-run setting, read once the hub is online (prompts carry it, as the app's saved policy). */
   async syncUserSettings() {
-    await this.loadUser();
+    await this.loadUser().catch((e) => this.b.log(`[agy] user settings: ${this.err(e)}`));
   }
 
   private async loadAuth() {
-    const before = this.auth?.loggedIn;
+    const before = JSON.stringify(this.auth);
+    const wasIn = this.auth?.loggedIn;
     try {
-      const st = await this.b.callHub('GetAuthStatus', {});
+      const st = await this.hub('GetAuthStatus', {});
       const loggedIn = st.auth_result?.has_valid_auth === true;
       const a: Auth = { loggedIn, email: '', name: '', tier: '', plan: '', upgradeUri: '', upgradeText: '', promptCredits: null, flowCredits: null };
       if (loggedIn) {
         try {
-          const res = await this.b.callHub('GetUserStatus', { metadata: {} });
+          const res = await this.hub('GetUserStatus', { metadata: {} });
           const us = res.user_status ?? {};
           const clean = (v: unknown) => (typeof v === 'string' && v !== 'null' ? v : '');
           a.email = clean(us.email);
@@ -176,36 +277,52 @@ export class AgySettings implements AgentSettingsProvider {
       }
       this.auth = a;
     } catch (e) {
-      this.b.log(`[agy] auth: ${this.err(e)}`);
       // unreachable: keep what was known (the app keeps the auth state on a network failure)
-      if (!this.auth) {
-        this.changed();
-        return;
-      }
+      this.b.log(`[agy] auth: ${this.err(e)}`);
     }
+    if (JSON.stringify(this.auth) === before) return;
     this.changed();
-    if (before !== this.auth?.loggedIn) this.b.notifyModels();
+    this.b.notifyStatus();
+    if (wasIn !== this.auth?.loggedIn) this.b.notifyModels();
+  }
+
+  /** The bridge's agy check (installed, path, version, a running install / update). */
+  refreshCli(): Promise<void> {
+    if (!this.cliLoading) {
+      this.cliTriedAt = Date.now();
+      const before = JSON.stringify([this.cliInstalled(), this.cliVersion()]);
+      this.cliLoading = this.loadCli()
+        .then(() => {
+          if (JSON.stringify([this.cliInstalled(), this.cliVersion()]) === before) return;
+          this.b.notifyStatus();
+          this.changed();
+        })
+        .finally(() => {
+          this.cliLoading = null;
+        });
+    }
+    return this.cliLoading;
   }
 
   // ------------------------------------------------------------------ root section
 
+  /** "you@gmail.com · Google AI Pro" / "Not signed in" / why Antigravity isn't running. */
+  private accountSummary(): string {
+    const st = this.b.status();
+    if (st.state === 'not_installed') return 'agy is not installed';
+    if (st.state === 'starting') return 'Starting…';
+    if (st.state !== 'online') return st.detail ?? 'Not running';
+    if (this.signingIn) return 'Signing in…';
+    if (!this.auth) return 'Online';
+    if (!this.auth.loggedIn) return 'Not signed in';
+    return [this.auth.email || this.auth.name || 'Signed in', this.planLabel()].filter(Boolean).join(' · ');
+  }
+
   /** The "Antigravity" row on the settings root (opens the agy page). */
   rootItem(): SettingItem {
-    if (!this.auth) void this.refreshAuth();
-    const st = this.b.status();
-    const state =
-      st.state === 'online'
-        ? this.signingIn
-          ? 'Signing in…'
-          : this.auth?.loggedIn
-            ? this.auth.email || 'Signed in'
-            : this.auth
-              ? 'Not signed in'
-              : 'Online'
-        : st.state === 'starting'
-          ? 'Starting…'
-          : 'Offline';
-    return { kind: 'page', id: 'agy', label: 'Antigravity', icon: 'rocket_launch', description: state, badge: this.cli?.version ? `agy ${this.cli.version}` : null };
+    this.ensureAuth();
+    const v = this.cliVersion();
+    return { kind: 'page', id: 'agy', label: 'Antigravity', icon: 'rocket_launch', description: this.accountSummary(), badge: v ? `agy ${v}` : null };
   }
 
   private policyLabel(): string | null {
@@ -214,80 +331,76 @@ export class AgySettings implements AgentSettingsProvider {
     return p.includes('EAGER') ? 'Auto-run' : p.includes('AUTO') ? 'Smart safety' : 'Ask first';
   }
 
-  /** Antigravity's own page: account, usage limits, then its settings pages (the app's AntigravitySettingsMenu). */
+  /**
+   * Antigravity's own page: links only (the app's AntigravitySettingsMenu). Account & CLI first (install, account,
+   * usage limits), then MCP Servers, Skills & Plugins, Commands & Permissions. Built from what is known: instant.
+   */
   private mainPage(): SettingsPage {
-    if (!this.auth) void this.refreshAuth();
-    if (!this.cli) void this.loadCli().then(() => this.changed());
-    // the rows' summaries ("2 active", "17 skills · 1 plugin") load once in the background
-    if (!this.mcp) void this.loadMcp().then(() => this.changed());
-    if (!this.skills) void this.loadSkills().then(() => this.changed());
-    const st = this.b.status();
-    const a = this.auth;
-    const items: SettingItem[] = [
-      {
-        kind: 'info',
-        id: 'agy.status',
-        label: 'Hub',
-        value: st.state === 'online' ? 'Online' : st.state === 'starting' ? 'Starting…' : (st.detail ?? st.state),
-        tone: st.state === 'online' ? 'ok' : st.state === 'starting' ? 'warn' : 'error',
-      },
-      {
-        kind: 'info',
-        id: 'agy.account',
-        label: 'Account',
-        value: this.signingIn ? 'Signing in…' : a == null ? 'Checking…' : a.loggedIn ? a.email || a.name || 'Signed in' : 'Not signed in',
-        tone: this.signingIn ? 'warn' : a?.loggedIn ? 'ok' : a ? 'warn' : 'muted',
-        description: a?.loggedIn && a.name && a.email ? a.name : null,
-      },
-    ];
-    if (a?.loggedIn) {
-      const plan = [a.tier, a.plan && a.plan !== a.tier ? a.plan : ''].filter(Boolean).join(' · ');
-      if (plan) items.push({ kind: 'info', id: 'agy.plan.info', label: 'Plan', value: plan });
-      if (a.promptCredits != null || a.flowCredits != null)
-        items.push({ kind: 'info', id: 'agy.credits', label: 'Credits', value: `${a.promptCredits ?? 0} prompt · ${a.flowCredits ?? 0} flow`, tone: 'muted' });
+    this.ensureAuth();
+    if (!this.cli && Date.now() - this.cliTriedAt > 15_000) void this.refreshCli();
+    const online = this.b.status().state === 'online';
+    // the rows' values ("2 active", "17 skills · 1 plugin") load once in the background while the hub runs
+    if (online && (!this.mcp || !this.skills) && Date.now() - this.summariesTriedAt > 30_000) {
+      this.summariesTriedAt = Date.now();
+      void Promise.allSettled([this.mcp ? null : this.loadMcp(), this.skills ? null : this.loadSkills()]).then(() => this.changed());
     }
-    // no sign-in / sign-out button until the account state is known
-    if (this.signingIn) {
-      items.push({ kind: 'button', id: 'agy.signin.open', label: 'Open the sign-in page again', description: this.signingIn.url || 'Waiting for the sign-in address…', disabled: !this.signingIn.url });
-      items.push({ kind: 'button', id: 'agy.signin.cancel', label: 'Cancel sign-in' });
-    } else if (a?.loggedIn) {
-      if (a.upgradeUri) items.push({ kind: 'button', id: 'agy.plan', label: 'Manage plan', description: a.upgradeText || null });
-      items.push({ kind: 'button', id: 'agy.signout', label: 'Sign out', style: 'danger', confirm: 'Sign out of Antigravity?' });
-    } else if (a) {
-      items.push({ kind: 'button', id: 'agy.signin', label: 'Sign in with Google', style: 'primary', disabled: st.state !== 'online' });
-    }
-    const groups = applyQuota([], this.b.quota()).groups;
-    const sections: SettingsPage['sections'] = [{ id: 'account', title: '', agent: 'AGY', items }];
-    if (groups.length) sections.push({ id: 'usage', title: '', agent: 'AGY', items: [{ kind: 'quota', id: 'agy.quota', label: 'Usage limits', groups }] });
-    const active = this.mcp ? this.mcp.states.filter((s) => s.spec?.disabled !== true).length : 0;
-    const mcpTotal = this.mcpNames().length;
-    const mcpValue = !this.mcp ? null : !mcpTotal ? 'None' : active ? `${active} active` : 'All off';
-    sections.push({
-      id: 'settings',
-      title: '',
-      agent: 'AGY',
-      items: [
-        { kind: 'page', id: 'agy.permissions', label: 'Commands & Permissions', icon: 'shield', description: this.policyLabel() ?? 'Auto-run, file access, permission rules' },
-        { kind: 'page', id: 'agy.mcp', label: 'MCP Servers', icon: 'extension', description: mcpValue, badge: this.mcp ? String(mcpTotal) : null },
+    const installed = this.cliInstalled();
+    const v = this.cliVersion();
+    const servers = this.mcp && !this.mcp.error ? this.mcpViews() : null;
+    return {
+      id: 'agy',
+      title: 'Antigravity',
+      sections: [
         {
-          kind: 'page',
-          id: 'agy.skills',
-          label: 'Skills & Plugins',
-          icon: 'auto_awesome',
-          description: this.skills ? `${this.skills.length} skills · ${this.plugins?.length ?? 0} plugin${this.plugins?.length === 1 ? '' : 's'}` : null,
+          id: 'cli',
+          title: '',
+          agent: 'AGY',
+          items: [
+            {
+              kind: 'page',
+              id: 'agy.cli',
+              label: 'Account & CLI',
+              icon: 'account',
+              description: this.accountSummary(),
+              badge: v ? `agy ${v}` : installed === false ? 'Not installed' : null,
+            },
+          ],
         },
-        { kind: 'page', id: 'agy.cli', label: 'Antigravity CLI', icon: 'terminal', badge: this.cli?.version || null, description: this.cli ? (this.cli.installed ? null : 'Not installed') : null },
+        {
+          id: 'pages',
+          title: '',
+          agent: 'AGY',
+          items: [
+            { kind: 'page', id: 'agy.mcp', label: 'MCP Servers', icon: 'hub', description: 'Model Context Protocol tools & integrations', badge: mcpSummary(servers) },
+            {
+              kind: 'page',
+              id: 'agy.skills',
+              label: 'Skills & Plugins',
+              icon: 'auto_awesome',
+              description: 'Agent capabilities, Google plugins, and extensions',
+              badge: this.skills ? `${this.skills.length} skills · ${this.plugins?.length ?? 0} plugin${this.plugins?.length === 1 ? '' : 's'}` : null,
+            },
+            { kind: 'page', id: 'agy.permissions', label: 'Commands & Permissions', icon: 'shield', description: 'Auto-run policy, sandbox mode, and tool approvals', badge: this.policyLabel() },
+          ],
+        },
       ],
-    });
-    return { id: 'agy', title: 'Antigravity', sections };
+    };
   }
 
   // ------------------------------------------------------------------ pages
 
   async page(id: string): Promise<SettingsPage | null> {
+    if (id === 'agy') return this.mainPage();
+    if (id === 'agy.cli') {
+      // works with the hub down too: it is where agy is installed or fixed
+      await Promise.allSettled([this.loadCli(), this.b.status().state === 'online' && !this.auth ? withTimeout(this.refreshAuth(), HUB_READ_MS, 'Antigravity') : null]);
+      return this.cliPage();
+    }
+    if (!(id in TITLES)) return null;
+    // every other page reads the hub: when it is down, say so at once (with the way to fix it)
+    if (!(await this.b.waitOnline(WAIT_ONLINE_MS)))
+      return unavailablePage(id, TITLES[id], 'AGY', this.downReason(), { page: 'agy.cli', label: 'Account & CLI', description: 'Install agy, or see why Antigravity isn’t running' });
     switch (id) {
-      case 'agy':
-        return this.mainPage();
       case 'agy.permissions':
         // always the hub's current values (also confirms a write took effect)
         await Promise.all([this.loadUser(), this.loadProjects()]);
@@ -296,15 +409,11 @@ export class AgySettings implements AgentSettingsProvider {
         await this.loadMcp();
         return this.mcpPage();
       case 'agy.mcp.catalog':
-        if (!this.catalog) await this.loadCatalog('');
-        if (!this.mcp) await this.loadMcp();
+        await Promise.all([this.catalog ? null : this.loadCatalog(''), this.mcp ? null : this.loadMcp()]);
         return this.catalogPage();
       case 'agy.skills':
         await this.loadSkills();
         return this.skillsPage();
-      case 'agy.cli':
-        await this.loadCli();
-        return this.cliPage();
       default:
         return null;
     }
@@ -317,7 +426,7 @@ export class AgySettings implements AgentSettingsProvider {
     const ac = new AbortController();
     let got = false;
     try {
-      const rpc = await this.b.rpcReady();
+      const rpc = await this.rpc();
       await Promise.race([
         rpc.streamRaw(
           'JetboxSubscribeToState',
@@ -356,6 +465,7 @@ export class AgySettings implements AgentSettingsProvider {
    */
   private async writeUser(patch: Record<string, unknown>) {
     // always from the hub's current bytes, read just now
+    await this.online();
     this.rawUserConfig = null;
     await this.loadUser();
     if (!this.rawUserConfig) throw new Error("Couldn't read the current Antigravity settings, nothing was changed");
@@ -369,7 +479,7 @@ export class AgySettings implements AgentSettingsProvider {
     if (typeof patch.auto_execution_policy === 'string') this.b.store.set('agy.autoExecPolicy', patch.auto_execution_policy);
     this.changed();
     try {
-      await this.b.callHubRaw('JetboxWriteState', request);
+      await this.hubRaw('JetboxWriteState', request);
     } catch (e) {
       await this.loadUser();
       this.changed();
@@ -396,7 +506,7 @@ export class AgySettings implements AgentSettingsProvider {
     const ac = new AbortController();
     let ids: string[] = [];
     try {
-      const rpc = await this.b.rpcReady();
+      const rpc = await this.rpc();
       await Promise.race([
         rpc.stream(
           'ProjectUpdatesStream',
@@ -419,7 +529,7 @@ export class AgySettings implements AgentSettingsProvider {
 
   private async loadProjects() {
     try {
-      const res = await this.b.callHub('ReadProjects', { ids: await this.projectIds() });
+      const res = await this.hub('ReadProjects', { ids: await this.projectIds() });
       const unset = (v: unknown) => (typeof v === 'string' && !v.endsWith('_UNSPECIFIED') ? v : null);
       this.projects = (res.projects ?? [])
         .filter((p: any) => p.id !== 'outside-of-project')
@@ -447,7 +557,7 @@ export class AgySettings implements AgentSettingsProvider {
    * with only its settings' policies replaced (inherit = those policies cleared), everything else kept.
    */
   private async writeProject(id: string, preset: (typeof PRESETS)[number] | null) {
-    const raw = await this.b.callHubRaw('ReadProjects', encodeAs('ReadProjectsRequest', { ids: [id] }));
+    const raw = await this.hubRaw('ReadProjects', encodeAs('ReadProjectsRequest', { ids: [id] }));
     const project = rawFields(raw)
       .filter((f) => f.id === 1 && f.payload)
       .map((f) => f.payload!)
@@ -463,7 +573,7 @@ export class AgySettings implements AgentSettingsProvider {
       : { auto_execution_policy: 0, file_access_policy: 0, artifact_review_mode: 0, sandbox_mode: false };
     const settings = patchMessage('ProjectSettings', settingsRaw, patch);
     const newProject = concat([...fields.filter((f) => f.id !== 10).map((f) => f.bytes), lengthDelimited(10, settings)]);
-    await this.b.callHubRaw('UpdateProject', lengthDelimited(1, newProject)); // UpdateProjectRequest.project = 1
+    await this.hubRaw('UpdateProject', lengthDelimited(1, newProject)); // UpdateProjectRequest.project = 1
   }
 
   private permissionsPage(): SettingsPage {
@@ -507,8 +617,8 @@ export class AgySettings implements AgentSettingsProvider {
       sections: [
         {
           id: 'preset',
-          title: 'Security preset',
-          description: 'Live hub settings, applied across all workspaces',
+          title: '',
+          description: 'Security preset: live hub settings, applied across all workspaces',
           agent: 'AGY',
           items: [
             {
@@ -550,7 +660,7 @@ export class AgySettings implements AgentSettingsProvider {
         },
         {
           id: 'artifacts',
-          title: 'Artifacts',
+          title: '',
           items: [
             {
               kind: 'select',
@@ -567,12 +677,12 @@ export class AgySettings implements AgentSettingsProvider {
         },
         {
           id: 'rules',
-          title: 'Permission rules',
+          title: '',
           items: [
             {
               kind: 'list',
               id: 'grants',
-              label: 'Rules',
+              label: 'Permission rules',
               description: 'Always allow, ask or deny matching actions (e.g. command(npm test*))',
               emptyText: 'No rules yet: tools and files follow the preset above',
               rows: this.grants().map((g) => ({
@@ -592,13 +702,13 @@ export class AgySettings implements AgentSettingsProvider {
         },
         {
           id: 'projects',
-          title: 'Project overrides',
+          title: '',
           description: `Projects inherit the global preset or keep their own (${projects.filter((p) => !p.auto && !p.files && !p.review && !p.sandbox).length}/${projects.length} inheriting)`,
-          items: [{ kind: 'list', id: 'projects', label: 'Projects', rows: projectRows, emptyText: 'No projects registered on the hub yet' }],
+          items: [{ kind: 'list', id: 'projects', label: 'Project overrides', rows: projectRows, emptyText: 'No projects registered on the hub yet' }],
         },
         {
           id: 'approvals',
-          title: 'Approvals',
+          title: '',
           items: [
             {
               kind: 'select',
@@ -620,24 +730,46 @@ export class AgySettings implements AgentSettingsProvider {
 
   // --- MCP
 
+  /** The hub's live servers (status, tools) and mcp_config.json (the bridge reads and writes it). */
   private async loadMcp() {
+    let error: string | null = null;
+    let configRead = true;
+    const [states, cfg] = await Promise.all([
+      this.hub('GetMcpServerStates', {}).catch((e) => {
+        error = this.err(e);
+        return { states: this.mcp?.states ?? [] };
+      }),
+      this.bridge('/api/mcp/config').catch((e) => {
+        error = error ?? this.err(e);
+        configRead = false;
+        return { path: this.mcp?.configPath ?? '', content: this.mcp ? JSON.stringify(this.mcp.config) : '{"mcpServers":{}}' };
+      }),
+    ]);
+    let config: any = {};
     try {
-      const [states, cfg] = await Promise.all([
-        this.b.callHub('GetMcpServerStates', {}).catch(() => ({ states: [] })),
-        this.b.bridgeJson('/api/mcp/config').catch(() => ({ path: '', content: '{"mcpServers":{}}' })),
-      ]);
-      let config: any = {};
-      try {
-        config = JSON.parse(cfg.content || '{}');
-      } catch {
-        config = { mcpServers: {} };
-      }
-      if (!config.mcpServers) config.mcpServers = {};
-      this.mcp = { states: states.states ?? [], configPath: cfg.path ?? '', config };
-    } catch (e) {
-      this.b.log(`[agy] mcp: ${this.err(e)}`);
-      this.mcp = { states: [], configPath: '', config: { mcpServers: {} } };
+      config = JSON.parse(cfg.content || '{}');
+    } catch {
+      // a file that isn't JSON is never written over
+      config = { mcpServers: {} };
+      configRead = false;
+      error = error ?? `${cfg.path || 'mcp_config.json'} is not valid JSON`;
     }
+    if (!config.mcpServers) config.mcpServers = {};
+    this.mcp = { states: states.states ?? [], configPath: cfg.path ?? '', config, error, configRead };
+  }
+
+  /** mcp_config.json as it is now, for a change (another window may have changed it); a change is never made from a
+   *  file that could not be read. */
+  private async mcpForWrite() {
+    await this.loadMcp();
+    if (!this.mcp?.configRead) throw new Error(`Couldn't read the MCP config${this.mcp?.error ? ` (${this.mcp.error})` : ''}, nothing was changed`);
+    return this.mcp;
+  }
+
+  /** Configured servers with their URLs (presets tell "added" from "added with another address"). */
+  private mcpEntries(): { name: string; url: string | null }[] {
+    const cfg = (this.mcp?.config.mcpServers ?? {}) as Record<string, any>;
+    return this.mcpNames().map((name) => ({ name, url: cfg[name]?.serverUrl ?? cfg[name]?.url ?? null }));
   }
 
   private mcpNames(): string[] {
@@ -648,127 +780,127 @@ export class AgySettings implements AgentSettingsProvider {
     );
   }
 
-  private mcpForm(name = '', spec: any = {}): SettingFormField[] {
-    const isRemote = !!(spec.serverUrl || spec.url);
-    return [
-      { id: 'name', label: 'Name', kind: 'text', value: name, placeholder: 'github', required: true },
-      {
-        id: 'type',
-        label: 'Type',
-        kind: 'select',
-        value: isRemote ? 'http' : 'stdio',
-        options: [
-          { value: 'stdio', label: 'Command (stdio)' },
-          { value: 'http', label: 'Remote URL (HTTP / SSE)' },
-        ],
-      },
-      { id: 'command', label: 'Command', kind: 'text', value: spec.command ?? '', placeholder: 'npx' },
-      { id: 'args', label: 'Arguments (one per line)', kind: 'multiline', value: (spec.args ?? []).join('\n'), placeholder: '-y\n@modelcontextprotocol/server-github' },
-      { id: 'env', label: 'Environment (KEY=value per line)', kind: 'multiline', value: Object.entries(spec.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n') },
-      { id: 'url', label: 'URL', kind: 'text', value: spec.serverUrl ?? spec.url ?? '', placeholder: 'https://example.com/mcp' },
-      { id: 'headers', label: 'Headers (Name: value per line)', kind: 'multiline', value: Object.entries(spec.headers ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n') },
-    ];
+  /** The add / edit form (mcp_config.json: command + args + env, or serverUrl + headers). */
+  private mcpFormFor(name = '', spec: any = {}): SettingFormField[] {
+    const remote = !!(spec.serverUrl || spec.url);
+    return mcpForm({
+      name,
+      remote,
+      command: spec.command ? joinCommand([spec.command, ...(spec.args ?? []).map(String)]) : '',
+      env: spec.env,
+      url: spec.serverUrl ?? spec.url ?? '',
+      headers: spec.headers,
+    });
+  }
+
+  private mcpViews(): McpServerView[] {
+    const m = this.mcp ?? { states: [], configPath: '', config: { mcpServers: {} }, error: null };
+    return this.mcpNames().map((name) => {
+      const st = m.states.find((s) => s.spec?.server_name === name);
+      const cfg = m.config.mcpServers?.[name];
+      const disabled = cfg?.disabled === true || st?.spec?.disabled === true;
+      const status: string = st?.status ?? '';
+      const tools: any[] = st?.tools ?? [];
+      const state: McpState = disabled
+        ? 'off'
+        : status.includes('READY') || status.includes('CONNECTED')
+          ? 'connected'
+          : status.includes('ERROR')
+            ? 'error'
+            : status.includes('PENDING')
+              ? 'connecting'
+              : status.includes('DISABLED')
+                ? 'off'
+                : 'idle';
+      const spec = cfg ?? {};
+      const where = spec.serverUrl || spec.url || st?.spec?.server_url || [spec.command ?? st?.spec?.command, ...(spec.args ?? st?.spec?.args ?? [])].filter(Boolean).join(' ');
+      return {
+        name,
+        state,
+        where: where || null,
+        origin: cfg ? null : 'from a plugin',
+        error: st?.error || null,
+        tools: st ? tools.length : null,
+        toolNames: tools.map((t) => t.name).filter(Boolean),
+        enabled: !disabled,
+        reconnect: true,
+        editForm: cfg ? this.mcpFormFor(name, cfg) : null,
+        removable: !!cfg,
+      };
+    });
   }
 
   private mcpPage(): SettingsPage {
-    const m = this.mcp ?? { states: [], configPath: '', config: { mcpServers: {} } };
-    const rows = this.mcpNames().map((name) => {
-      const st = m.states.find((s) => s.spec?.server_name === name);
-      const cfg = m.config.mcpServers?.[name] ?? {};
-      const disabled = cfg.disabled === true || st?.spec?.disabled === true;
-      const status: string = st?.status ?? '';
-      const tools: any[] = st?.tools ?? [];
-      const toolNames = tools.map((t) => t.name).filter(Boolean);
-      const where = cfg.serverUrl || cfg.url || st?.spec?.server_url || [cfg.command ?? st?.spec?.command, ...(cfg.args ?? st?.spec?.args ?? [])].filter(Boolean).join(' ');
-      return {
-        id: name,
-        title: name,
-        subtitle: st?.error
-          ? st.error
-          : toolNames.length
-            ? `${toolNames.slice(0, 6).join(', ')}${toolNames.length > 6 ? ` +${toolNames.length - 6}` : ''}`
-            : where || null,
-        status: disabled
-          ? 'Off'
-          : status.includes('READY') || status.includes('CONNECTED')
-            ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
-            : status.includes('ERROR')
-              ? 'Error'
-              : status
-                ? status.replace('MCP_SERVER_STATUS_', '').toLowerCase()
-                : 'Not started',
-        statusTone: (disabled ? 'muted' : status.includes('ERROR') ? 'error' : status.includes('READY') || status.includes('CONNECTED') ? 'ok' : 'warn') as 'ok' | 'warn' | 'error' | 'muted',
-        toggle: !disabled,
-        actions: [
-          { id: 'refresh', label: 'Reconnect' },
-          ...(m.config.mcpServers?.[name]
-            ? [
-                { id: 'edit', label: 'Edit', form: this.mcpForm(name, cfg) },
-                { id: 'remove', label: 'Remove', danger: true, confirm: `Remove the MCP server "${name}"?` },
-              ]
-            : []),
-        ],
-      };
-    });
-    return {
+    const m = this.mcp;
+    return mcpPage({
       id: 'agy.mcp',
       title: 'MCP Servers',
-      sections: [
-        {
-          id: 'servers',
-          title: 'Servers',
-          agent: 'AGY',
-          description: m.configPath ? `Config: ${m.configPath}` : null,
-          items: [
-            { kind: 'list', id: 'servers', label: 'MCP servers', rows, emptyText: 'No MCP servers yet', addLabel: 'Add server', addForm: this.mcpForm() },
-            { kind: 'button', id: 'refreshAll', label: 'Reconnect all servers' },
-          ],
-        },
+      agent: 'AGY',
+      description: `Tools Antigravity can call.${m?.configPath ? ` Config: ${m.configPath}` : ''}`,
+      servers: this.mcpViews(),
+      error: m?.error ?? null,
+      addForm: this.mcpFormFor(),
+      presets: [presetsItem(this.mcpEntries(), this.mcpFormFor())],
+      extra: [
         {
           id: 'catalog',
           title: '',
           items: [{ kind: 'page', id: 'agy.mcp.catalog', label: 'MCP catalog', icon: 'storefront', description: 'One-click MCP integrations (Firebase, BigQuery, Cloud…)' }],
         },
       ],
-    };
+    });
   }
 
   private async saveMcpConfig() {
     if (!this.mcp) return;
-    await this.b.bridgeJson('/api/mcp/config', { method: 'POST', body: JSON.stringify({ content: JSON.stringify(this.mcp.config, null, 2) }), headers: { 'content-type': 'application/json' } });
-    await this.b.callHub('RefreshMcpServers', {}).catch(() => undefined);
+    await this.bridge('/api/mcp/config', { method: 'POST', body: JSON.stringify({ content: JSON.stringify(this.mcp.config, null, 2) }), headers: { 'content-type': 'application/json' } }, 15_000);
+    await this.hub('RefreshMcpServers', {}).catch(() => undefined);
     await this.loadMcp();
   }
 
+  /** Adds a server from the add form (the custom tile too). */
+  private async addServer(values: Record<string, string>): Promise<string> {
+    const mcp = await this.mcpForWrite();
+    const name = (values.name ?? '').trim();
+    if (!name) throw new Error('Enter a name');
+    if (mcp.config.mcpServers[name]) throw new Error(`"${name}" exists already: edit it instead`);
+    mcp.config.mcpServers[name] = this.specFromForm(values);
+    await this.saveMcpConfig();
+    this.changed();
+    return `Added ${name}`;
+  }
+
+  /** A preset tile (the app's McpSubScreen presets): mcp_config.json `mcpServers.<serverName>` = {serverUrl, headers}
+   *  or {command, args}, then the hub reconnects its servers. */
+  private async addPreset(tileId: string, values?: Record<string, string>): Promise<string> {
+    const mcp = await this.mcpForWrite();
+    const tap = presetTap(tileId, values, this.mcpEntries());
+    if (tap.kind === 'done') return tap.message;
+    if (tap.kind === 'custom') {
+      if (!values) throw new Error('Fill in the server to add');
+      return this.addServer(values);
+    }
+    const p = tap.preset;
+    const headers = presetHeaders(p);
+    mcp.config.mcpServers[p.serverName] =
+      p.transport === 'stdio' ? { command: p.command, ...(p.args?.length ? { args: p.args } : {}) } : { serverUrl: p.url, ...(Object.keys(headers).length ? { headers } : {}) };
+    await this.saveMcpConfig();
+    this.changed();
+    return `Added ${p.name}`;
+  }
+
+  /** mcp_config.json entry from the add / edit form. */
   private specFromForm(v: Record<string, string>): any {
-    const lines = (s?: string) =>
-      (s ?? '')
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-    if (v.type === 'http') {
-      const headers: Record<string, string> = {};
-      for (const l of lines(v.headers)) {
-        const i = l.indexOf(':');
-        if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim();
-      }
-      if (!v.url?.trim()) throw new Error('Enter the server URL');
-      return { serverUrl: v.url.trim(), ...(Object.keys(headers).length ? { headers } : {}) };
-    }
-    const env: Record<string, string> = {};
-    for (const l of lines(v.env)) {
-      const i = l.indexOf('=');
-      if (i > 0) env[l.slice(0, i).trim()] = l.slice(i + 1);
-    }
-    if (!v.command?.trim()) throw new Error('Enter the command');
-    return { command: v.command.trim(), args: lines(v.args), ...(Object.keys(env).length ? { env } : {}) };
+    const f = mcpFormValues(v);
+    if (f.remote) return { serverUrl: f.url, ...(Object.keys(f.headers).length ? { headers: f.headers } : {}) };
+    return { command: f.command[0], args: f.command.slice(1), ...(Object.keys(f.env).length ? { env: f.env } : {}) };
   }
 
   // --- MCP catalog (GetAvailableCascadePlugins: the app's CascadeMcpCatalogDialog)
 
   private async loadCatalog(query: string) {
     try {
-      const r = await this.b.callHub('GetAvailableCascadePlugins', { os: process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'windows' : 'linux', search_query: query, metadata: {} });
+      const r = await this.hub('GetAvailableCascadePlugins', { os: process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'windows' : 'linux', search_query: query, metadata: {} });
       this.catalog = { query, plugins: r.plugins ?? [], error: null };
     } catch (e) {
       this.catalog = { query, plugins: [], error: this.err(e) };
@@ -821,8 +953,8 @@ export class AgySettings implements AgentSettingsProvider {
       sections: [
         {
           id: 'catalog',
-          title: 'Cascade MCP catalog',
-          description: c.error ? `Couldn't load the catalog: ${c.error}` : `${c.plugins.length} package${c.plugins.length === 1 ? '' : 's'}${c.query ? ` matching "${c.query}"` : ''}`,
+          title: '',
+          description: c.error ? `Couldn't load the catalog: ${c.error}` : `Cascade MCP catalog: ${c.plugins.length} package${c.plugins.length === 1 ? '' : 's'}${c.query ? ` matching "${c.query}"` : ''}`,
           agent: 'AGY',
           items: [
             { kind: 'text', id: 'search', label: 'Search', value: c.query, placeholder: 'Firebase, BigQuery, Firestore…' },
@@ -838,9 +970,9 @@ export class AgySettings implements AgentSettingsProvider {
   private async loadSkills() {
     const ws = this.skillScope === 'GLOBAL' ? null : this.b.workspaceHint();
     const [sk, pl, st] = await Promise.all([
-      this.b.callHub('GetAllSkills', { workspace_uris: ws ? [ws] : [] }).catch(() => ({ skills: [] })),
-      this.b.callHub('GetAllPlugins', {}).catch(() => ({ plugins: [] })),
-      this.b.callHub('GetBuildWithGooglePlugins', {}).catch(() => ({ plugins: [] })),
+      this.hub('GetAllSkills', { workspace_uris: ws ? [ws] : [] }).catch(() => ({ skills: [] })),
+      this.hub('GetAllPlugins', {}).catch(() => ({ plugins: [] })),
+      this.hub('GetBuildWithGooglePlugins', {}).catch(() => ({ plugins: [] })),
     ]);
     const isWorkspace = (s: any) => s.discovery_category === 'DISCOVERY_CATEGORY_WORKSPACE' || !!s.scope?.local_scope || !!s.scope?.project_scope;
     const all: any[] = sk.skills ?? [];
@@ -864,7 +996,7 @@ export class AgySettings implements AgentSettingsProvider {
       sections: [
         {
           id: 'skills',
-          title: `Skills (${skills.length})`,
+          title: '',
           agent: 'AGY',
           description: ws ? `Workspace: ${ws.replace(/^file:\/\//, '')}` : 'Type / in the composer to use them',
           items: [
@@ -887,12 +1019,12 @@ export class AgySettings implements AgentSettingsProvider {
         },
         {
           id: 'plugins',
-          title: `Installed plugins (${plugins.length})`,
+          title: '',
           items: [
             {
               kind: 'list',
               id: 'plugins',
-              label: 'Plugins',
+              label: 'Installed plugins',
               emptyText: 'No plugin bundles installed',
               rows: plugins.map((p) => {
                 const bundled = (p.skills ?? []).map((s: any) => `/${s.name}`);
@@ -914,8 +1046,8 @@ export class AgySettings implements AgentSettingsProvider {
         },
         {
           id: 'store',
-          title: 'Plugin store',
-          description: "Official 'Build with Google' plugins",
+          title: '',
+          description: "Plugin store: official 'Build with Google' plugins",
           items: [
             {
               kind: 'list',
@@ -944,47 +1076,137 @@ export class AgySettings implements AgentSettingsProvider {
     };
   }
 
-  // --- CLI
+  // --- Account & CLI (the app's AgyCliCard, its Accounts dialog entry and the usage limits)
 
   private async loadCli() {
     try {
-      this.cli = await this.b.bridgeJson('/api/agy/cli');
+      this.cli = await this.bridge('/api/agy/cli');
     } catch (e) {
-      this.cli = { installed: false, error: this.err(e) };
+      // unknown (bridge down): not "not installed"
+      this.cli = { ...(this.cli ?? {}), error: this.err(e) };
     }
     if (this.cli?.job?.running && !this.cliPoll) {
       this.cliPoll = setInterval(async () => {
+        const before = JSON.stringify([this.cliInstalled(), this.cliVersion()]);
         await this.loadCli();
         this.changed();
         if (!this.cli?.job?.running && this.cliPoll) {
           clearInterval(this.cliPoll);
           this.cliPoll = null;
+          const ok = this.cli?.job?.exit_code === 0;
+          this.b.notify(ok ? 'info' : 'error', ok ? `agy ${this.cli?.job?.kind === 'update' ? 'update' : 'install'} finished` : `agy ${this.cli?.job?.kind ?? 'install'} failed`);
         }
+        if (JSON.stringify([this.cliInstalled(), this.cliVersion()]) !== before) this.b.notifyStatus();
       }, 1500);
     }
   }
 
-  private cliPage(): SettingsPage {
-    const c = this.cli ?? {};
+  private cliItems(): SettingItem[] {
+    const c = this.cli;
+    const running = c?.job?.running === true;
+    const v = this.cliVersion();
     const items: SettingItem[] = [
-      { kind: 'info', id: 'installed', label: 'Installed', value: c.installed ? 'Yes' : 'No', tone: c.installed ? 'ok' : 'error' },
-      { kind: 'info', id: 'version', label: 'Version', value: c.version || '—' },
-      { kind: 'info', id: 'path', label: 'Path', value: c.path || '—', tone: 'muted' },
-      c.installed
-        ? { kind: 'button', id: 'update', label: 'Update agy', disabled: c.job?.running === true }
-        : { kind: 'button', id: 'install', label: 'Install agy', style: 'primary', disabled: c.job?.running === true },
+      {
+        kind: 'info',
+        id: 'agy.cli.state',
+        label: 'Antigravity CLI (agy)',
+        value: !c ? 'Checking…' : c.error ? 'Could not check' : c.installed ? (v ?? 'Installed') : 'Not installed',
+        tone: !c ? 'muted' : c.error ? 'error' : c.installed ? 'ok' : 'warn',
+        description: c?.error ? c.error : c?.path || null,
+      },
     ];
-    if (c.job) {
+    if (c && !c.error)
+      items.push(
+        c.installed
+          ? { kind: 'button', id: 'update', label: running && c.job?.kind === 'update' ? 'Checking…' : 'Check for updates', disabled: running }
+          : { kind: 'button', id: 'install', label: running ? 'Installing…' : 'Install agy', style: 'primary', disabled: running },
+      );
+    if (c?.job) {
       items.push({
         kind: 'info',
         id: 'job',
-        label: c.job.running ? `${c.job.kind ?? 'Job'} running…` : `${c.job.kind ?? 'Job'} finished`,
-        value: c.job.running ? '' : c.job.exit_code === 0 ? 'Done' : `Exit ${c.job.exit_code ?? '?'}`,
+        label: c.job.kind === 'update' ? 'Update' : 'Install',
+        value: c.job.running ? 'running…' : c.job.exit_code === 0 ? 'done' : `failed (exit ${c.job.exit_code ?? '?'})`,
         tone: c.job.running ? 'warn' : c.job.exit_code === 0 ? 'ok' : 'error',
       });
-      if (c.job.log) items.push({ kind: 'text', id: 'log', label: 'Log', value: String(c.job.log).slice(-6000), multiline: true, disabled: true });
+      if (c.job.log)
+        items.push({ kind: 'text', id: 'log', label: 'Log', value: String(c.job.log).split('\n').slice(-30).join('\n'), multiline: true, code: true, rows: 10, disabled: true });
     }
-    return { id: 'agy.cli', title: 'Antigravity CLI', sections: [{ id: 'cli', title: 'agy', agent: 'AGY', items }] };
+    return items;
+  }
+
+  private accountItems(): SettingItem[] {
+    const st = this.b.status();
+    const a = this.auth;
+    if (st.state !== 'online' && !this.signingIn) {
+      return [
+        {
+          kind: 'info',
+          id: 'agy.account',
+          label: 'Google account',
+          value: st.state === 'starting' ? 'Starting…' : 'Not available',
+          tone: st.state === 'starting' ? 'muted' : 'error',
+          description: st.state === 'starting' ? 'Antigravity is starting: the account shows in a moment.' : `${blockedReason(st) ?? "Antigravity isn't running"}`,
+        },
+      ];
+    }
+    const items: SettingItem[] = [
+      {
+        kind: 'info',
+        id: 'agy.account',
+        label: 'Google account',
+        value: this.signingIn ? 'Signing in…' : a == null ? 'Checking…' : a.loggedIn ? a.email || a.name || 'Signed in' : 'Not signed in',
+        tone: this.signingIn ? 'warn' : a?.loggedIn ? 'ok' : a ? 'warn' : 'muted',
+        description: this.signingIn ? 'Finish signing in with Google in your browser.' : a?.loggedIn && a.name && a.email ? a.name : null,
+      },
+    ];
+    if (a?.loggedIn) {
+      const plan = [a.tier, a.plan && a.plan !== a.tier ? a.plan : ''].filter(Boolean).join(' · ');
+      if (plan) items.push({ kind: 'info', id: 'agy.plan.info', label: 'Plan', value: plan });
+      if (a.promptCredits != null || a.flowCredits != null)
+        items.push({ kind: 'info', id: 'agy.credits', label: 'Credits', value: `${a.promptCredits ?? 0} prompt · ${a.flowCredits ?? 0} flow`, tone: 'muted' });
+    }
+    // no sign-in / sign-out button until the account state is known
+    if (this.signingIn) {
+      items.push({ kind: 'button', id: 'agy.signin.open', label: 'Open the sign-in page again', style: 'primary', description: this.signingIn.url || 'Waiting for the sign-in address…', disabled: !this.signingIn.url });
+      items.push({ kind: 'button', id: 'agy.signin.cancel', label: 'Cancel sign-in' });
+    } else if (a?.loggedIn) {
+      if (a.upgradeUri) items.push({ kind: 'button', id: 'agy.plan', label: 'Manage plan', description: a.upgradeText || null });
+      items.push({ kind: 'button', id: 'agy.signout', label: 'Sign out', style: 'danger', confirm: 'Sign out of Antigravity?' });
+    } else if (a) {
+      items.push({ kind: 'button', id: 'agy.signin', label: 'Sign in with Google', style: 'primary' });
+    }
+    items.push({ kind: 'button', id: 'agy.account.refresh', label: 'Check again' });
+    return items;
+  }
+
+  /** Usage limits: what is left of each limit (one decimal, as the app) and when it resets. */
+  private usageItems(): SettingItem[] | null {
+    if (this.b.status().state !== 'online' || !this.auth?.loggedIn) return null;
+    const groups = applyQuota([], this.b.quota()).groups;
+    return [
+      groups.length
+        ? { kind: 'quota', id: 'agy.quota', label: 'Usage limits', groups }
+        : { kind: 'info', id: 'agy.quota', label: 'Usage limits', value: 'No usage information yet', tone: 'muted' },
+      { kind: 'button', id: 'agy.usage.refresh', label: 'Refresh usage' },
+    ];
+  }
+
+  private cliPage(): SettingsPage {
+    const sections: SettingsSection[] = [
+      {
+        id: 'cli',
+        title: '',
+        agent: 'AGY',
+        description:
+          "Installed with Google's official installer (antigravity.google/cli/install.sh) into ~/.local/bin. Check for updates runs `agy update`; restart the bridge afterwards so the hub uses the new agy.",
+        items: this.cliItems(),
+      },
+      { id: 'account', title: '', agent: 'AGY', items: this.accountItems() },
+    ];
+    const usage = this.usageItems();
+    if (usage) sections.push({ id: 'usage', title: '', agent: 'AGY', description: 'What is left of each limit, and when it resets', items: usage });
+    return { id: 'agy.cli', title: 'Account & CLI', sections };
   }
 
   // ------------------------------------------------------------------ edits
@@ -1028,14 +1250,14 @@ export class AgySettings implements AgentSettingsProvider {
       this.changed();
       return;
     }
-    if (page === 'agy.mcp' && id === 'servers' && rowId && this.mcp) {
+    if (page === 'agy.mcp' && id === MCP_LIST && rowId) {
       const enabled = value === true;
-      const cfg = this.mcp.config.mcpServers?.[rowId];
+      const cfg = (await this.mcpForWrite()).config.mcpServers?.[rowId];
       if (cfg) {
         if (enabled) delete cfg.disabled;
         else cfg.disabled = true;
       }
-      await this.b.callHub('ToggleMcpServer', { server_name: rowId, enabled }).catch(() => undefined);
+      await this.hub('ToggleMcpServer', { server_name: rowId, enabled }, HUB_WRITE_MS).catch(() => undefined);
       if (cfg) await this.saveMcpConfig();
       else await this.loadMcp();
       this.changed();
@@ -1043,11 +1265,11 @@ export class AgySettings implements AgentSettingsProvider {
   }
 
   async action(page: string, id: string, rowId?: string, actionId?: string, values?: Record<string, string>): Promise<string | void> {
-    if (page === 'agy') {
+    if (page === 'agy' || page === 'agy.cli') {
       if (id === 'agy.signin') return this.signIn();
       if (id === 'agy.signin.cancel') {
         this.stopSignIn();
-        await this.refreshAuth();
+        await withTimeout(this.refreshAuth(), HUB_READ_MS, 'Antigravity').catch(() => undefined);
         return 'Sign-in cancelled';
       }
       if (id === 'agy.signin.open' && this.signingIn?.url) {
@@ -1055,7 +1277,7 @@ export class AgySettings implements AgentSettingsProvider {
         return;
       }
       if (id === 'agy.signout') {
-        await this.b.callHub('AuthLogout', {});
+        await this.hub('AuthLogout', {}, HUB_WRITE_MS);
         this.auth = { loggedIn: false, email: '', name: '', tier: '', plan: '', upgradeUri: '', upgradeText: '', promptCredits: null, flowCredits: null };
         this.changed();
         this.b.afterSignIn();
@@ -1064,6 +1286,25 @@ export class AgySettings implements AgentSettingsProvider {
       if (id === 'agy.plan' && this.auth?.upgradeUri) {
         this.b.openUrl(this.auth.upgradeUri);
         return;
+      }
+      if (id === 'agy.account.refresh') {
+        await Promise.allSettled([this.loadCli(), this.b.status().state === 'online' ? withTimeout(this.refreshAuth(), HUB_READ_MS, 'Antigravity') : null]);
+        this.changed();
+        const st = this.b.status();
+        if (st.state !== 'online') throw new Error(this.downReason());
+        return;
+      }
+      if (id === 'agy.usage.refresh') {
+        await this.online();
+        await withTimeout(this.b.loadQuota(true), 15_000, 'Antigravity');
+        this.changed();
+        return;
+      }
+      if (page === 'agy.cli' && (id === 'install' || id === 'update')) {
+        await this.bridge(`/api/agy/cli/${id}`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } }, 15_000);
+        await this.loadCli();
+        this.changed();
+        return id === 'install' ? 'Installing agy…' : 'Checking for an agy update…';
       }
       return;
     }
@@ -1095,8 +1336,8 @@ export class AgySettings implements AgentSettingsProvider {
       const name = this.projects?.find((p) => p.id === rowId)?.name ?? rowId;
       return preset ? `${name}: ${preset.label}` : `${name} inherits the global settings`;
     }
-    if (page === 'agy.mcp' && id === 'refreshAll') {
-      await this.b.callHub('RefreshMcpServers', {});
+    if (page === 'agy.mcp' && id === MCP_REFRESH_ALL) {
+      await this.hub('RefreshMcpServers', {}, HUB_WRITE_MS);
       await new Promise((r) => setTimeout(r, 600));
       await this.loadMcp();
       this.changed();
@@ -1104,34 +1345,27 @@ export class AgySettings implements AgentSettingsProvider {
       const tools = (this.mcp?.states ?? []).reduce((a, s) => a + (s.tools?.length ?? 0), 0);
       return `Refreshed: ${n} server${n === 1 ? '' : 's'}, ${tools} tool${tools === 1 ? '' : 's'}`;
     }
-    if (page === 'agy.mcp' && id === 'servers') {
-      if (!this.mcp) await this.loadMcp();
-      const mcp = this.mcp!;
-      if (actionId === 'add' && values) {
-        const name = (values.name ?? '').trim();
-        if (!name) throw new Error('Enter a name');
-        mcp.config.mcpServers[name] = this.specFromForm(values);
-        await this.saveMcpConfig();
-        this.changed();
-        return `Added ${name}`;
-      }
+    if (page === 'agy.mcp' && id === MCP_LIST && rowId && actionId === MCP_RECONNECT) {
+      await this.hub('RefreshMcpServers', { server_name: rowId }, HUB_WRITE_MS);
+      await new Promise((r) => setTimeout(r, 600));
+      await this.loadMcp();
+      this.changed();
+      const s = this.mcp?.states.find((x) => x.spec?.server_name === rowId);
+      if (s?.error) throw new Error(`${rowId}: ${s.error}`);
+      return s?.tools?.length ? `Reconnected ${rowId}: ${s.tools.length} tools` : `Reconnected ${rowId}`;
+    }
+    if (page === 'agy.mcp' && id === MCP_PRESETS && actionId) return this.addPreset(actionId, values);
+    if (page === 'agy.mcp' && id === MCP_LIST) {
+      if (actionId === 'add' && values) return this.addServer(values);
       if (!rowId) return;
-      if (actionId === 'refresh') {
-        await this.b.callHub('RefreshMcpServers', { server_name: rowId });
-        await new Promise((r) => setTimeout(r, 600));
-        await this.loadMcp();
-        this.changed();
-        const s = this.mcp?.states.find((x) => x.spec?.server_name === rowId);
-        if (s?.error) throw new Error(`${rowId}: ${s.error}`);
-        return s?.tools?.length ? `Reconnected ${rowId}: ${s.tools.length} tools` : `Reconnected ${rowId}`;
-      }
-      if (actionId === 'remove') {
+      const mcp = await this.mcpForWrite();
+      if (actionId === MCP_REMOVE) {
         delete mcp.config.mcpServers[rowId];
         await this.saveMcpConfig();
         this.changed();
         return `Removed ${rowId}`;
       }
-      if (actionId === 'edit' && values) {
+      if (actionId === MCP_EDIT && values) {
         const name = (values.name ?? rowId).trim() || rowId;
         const spec = this.specFromForm(values);
         const old = mcp.config.mcpServers[rowId] ?? {};
@@ -1152,8 +1386,7 @@ export class AgySettings implements AgentSettingsProvider {
       if (actionId === 'install') {
         const spec = this.catalogSpec(p);
         if (!spec) throw new Error(`${p.title || p.id} has no server to install`);
-        await this.loadMcp(); // the config as it is now (another window may have changed it)
-        this.mcp!.config.mcpServers[rowId] = spec;
+        (await this.mcpForWrite()).config.mcpServers[rowId] = spec;
         await this.saveMcpConfig();
         this.changed();
         return `Installed and activated '${p.title || rowId}' MCP server`;
@@ -1170,26 +1403,20 @@ export class AgySettings implements AgentSettingsProvider {
         if (actionId === 'homepage' && p?.homepage) return void this.b.openUrl(p.homepage);
         if (actionId === 'repository' && p?.repository) return void this.b.openUrl(p.repository);
         if (actionId === 'delete') {
-          const r = await this.b.callHub('DeletePlugin', { plugin_id: rowId });
+          const r = await this.hub('DeletePlugin', { plugin_id: rowId });
           if (r.success !== true) throw new Error(r.message || 'Delete failed');
-          await this.b.callHub('RefreshMcpServers', {}).catch(() => undefined);
+          await this.hub('RefreshMcpServers', {}).catch(() => undefined);
           await this.afterPluginChange();
           return `Uninstalled ${p?.display_name || rowId}`;
         }
       }
       if (id === 'store' && actionId === 'install') {
-        const r = await this.b.callHub('DownloadBuildWithGooglePlugin', { plugin_id: rowId }, 5 * 60_000);
+        const r = await this.hub('DownloadBuildWithGooglePlugin', { plugin_id: rowId }, 5 * 60_000);
         if (r.success !== true) throw new Error(r.message || 'Download failed');
-        await this.b.callHub('RefreshMcpServers', {}).catch(() => undefined);
+        await this.hub('RefreshMcpServers', {}).catch(() => undefined);
         await this.afterPluginChange();
         return r.message || `Installed ${rowId}`;
       }
-    }
-    if (page === 'agy.cli' && (id === 'install' || id === 'update')) {
-      await this.b.bridgeJson(`/api/agy/cli/${id}`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } });
-      await this.loadCli();
-      this.changed();
-      return id === 'install' ? 'Installing agy…' : 'Updating agy…';
     }
   }
 
@@ -1208,19 +1435,23 @@ export class AgySettings implements AgentSettingsProvider {
     this.loginPoll = null;
     this.signingIn = null;
     this.changed();
+    this.b.notifyStatus();
   }
 
   /**
    * Google sign-in (the app's loginToAgyHub): already signed in → done; otherwise the hub's Login runs (the bridge
    * captures the address the hub prints, opened in the browser) while the account is polled until it is signed in.
    */
-  private async signIn(): Promise<string> {
+  private async signIn(): Promise<string | void> {
     if (this.loginPoll) {
       if (this.signingIn?.url) this.b.openUrl(this.signingIn.url);
       return 'Sign-in is already open in your browser';
     }
+    // the hub runs the sign-in: without it, say why at once
+    await this.online();
+    this.b.notify('info', 'Opening Google sign-in…');
     try {
-      const pre = await this.b.callHub('GetAuthStatus', {});
+      const pre = await this.hub('GetAuthStatus', {});
       if (pre.auth_result?.has_valid_auth) {
         await this.refreshAuth();
         return `Already signed in as ${this.auth?.name || this.auth?.email || 'your account'}`;
@@ -1230,6 +1461,7 @@ export class AgySettings implements AgentSettingsProvider {
     }
     this.signingIn = { url: '', started: Date.now() };
     this.changed();
+    this.b.notifyStatus();
     // Login blocks until the browser flow finishes; it may also answer with something the account must do first
     void this.b
       .callHub('Login', { is_gcp_tos: false }, 10 * 60_000)
@@ -1250,14 +1482,14 @@ export class AgySettings implements AgentSettingsProvider {
       if (!this.signingIn) return;
       try {
         if (!this.signingIn.url) {
-          const r = await this.b.bridgeJson('/api/auth/login-url');
+          const r = await this.bridge('/api/auth/login-url');
           if (r.loginUrl && this.signingIn) {
             this.signingIn.url = r.loginUrl;
             this.b.openUrl(r.loginUrl);
             this.changed();
           }
         }
-        const st = await this.b.callHub('GetAuthStatus', {});
+        const st = await this.hub('GetAuthStatus', {});
         if (st.auth_result?.has_valid_auth) {
           this.stopSignIn();
           await this.refreshAuth();
@@ -1266,13 +1498,12 @@ export class AgySettings implements AgentSettingsProvider {
         } else if (this.signingIn && Date.now() - this.signingIn.started > 5 * 60_000) {
           this.stopSignIn();
           await this.refreshAuth();
-          this.b.notify('warning', 'Sign-in timed out. Try again from Settings → Antigravity.');
+          this.b.notify('warning', 'Sign-in timed out. Try again from Settings → Antigravity → Account & CLI.');
         }
       } catch {
         /* keep polling */
       }
     }, 1500);
-    return 'Opening Google sign-in in your browser…';
   }
 
   dispose() {

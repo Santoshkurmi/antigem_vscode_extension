@@ -18,16 +18,24 @@ export interface ContextEntry {
   text: string;
   enabled: boolean;
   everyMessage: boolean;
+  /** Also told to Jarvis (its chats and the chats it starts for tasks). */
+  forJarvis?: boolean;
 }
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 const TOKEN_RE = /(?<=^|\s)\/([A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
+// the app's PromptExpansion TOKEN: `/plu:<plugin>[:<skill>]` (a dangling `:` left by the picker counts as no skill) or a
+// custom command
+const PLU_TOKEN_RE = /(?<=^|\s)\/(plu:[A-Za-z0-9_-]+(?::[A-Za-z0-9._-]*)?|[A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
 
 const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const block = (command: string, body: string) => `<antigem-expansion command="${escapeAttr(command)}">\n${body}\n</antigem-expansion>`;
 
 export class HostSettings {
   constructor(private store: KeyValueStore) {}
+
+  /** The note `/plu:<plugin>[:<skill>]` expands to (set by the plugin feature; null = not an enabled plugin). */
+  pluginGuide: ((pluginId: string, skill: string | null) => string | null) | null = null;
 
   // ---------------------------------------------------------------- custom `/` commands
 
@@ -51,12 +59,22 @@ export class HostSettings {
   /** Custom commands typed in the message become hidden expansion blocks (the chat still shows the command). */
   expand(text: string): string {
     const cmds = this.commandsList();
-    if (!cmds.length || !text.includes('/')) return text;
+    const guide = this.pluginGuide;
+    if ((!cmds.length && !guide) || !text.includes('/')) return text;
     let out = '';
     let last = 0;
-    for (const m of text.matchAll(TOKEN_RE)) {
+    for (const m of text.matchAll(guide ? PLU_TOKEN_RE : TOKEN_RE)) {
       const start = m.index ?? 0;
       if (start < last) continue;
+      if (guide && m[1].startsWith('plu:')) {
+        // `/plu:<plugin>[:<skill>]`: the plugin's guide; the chat shows the command without a dangling colon
+        const [plugin, skill] = m[1].slice(4).split(':');
+        const note = guide(plugin, skill || null);
+        if (note == null) continue;
+        out += text.slice(last, start) + block(skill ? m[0] : `/plu:${plugin}`, note);
+        last = start + m[0].length;
+        continue;
+      }
       const cmd = cmds.find((c) => c.name.toLowerCase() === m[1].toLowerCase());
       if (!cmd) continue;
       out += text.slice(last, start);
@@ -174,6 +192,16 @@ export class HostSettings {
           { value: 'every', label: 'With every message' },
         ],
       },
+      {
+        id: 'jarvis',
+        label: 'Also tell Jarvis',
+        kind: 'select',
+        value: e?.forJarvis ? 'yes' : 'no',
+        options: [
+          { value: 'no', label: 'No (Jarvis has strict rules a note for normal chats could break)' },
+          { value: 'yes', label: 'Yes: Jarvis chats and the tasks they start get it too' },
+        ],
+      },
     ];
   }
 
@@ -285,7 +313,7 @@ export class HostSettings {
       }
       if ((actionId === 'add' || actionId === 'edit') && values) {
         if (!values.text?.trim()) throw new Error('Enter the text');
-        const entry = { title: (values.title ?? '').trim(), text: values.text, everyMessage: values.when === 'every' };
+        const entry = { title: (values.title ?? '').trim(), text: values.text, everyMessage: values.when === 'every', forJarvis: values.jarvis === 'yes' };
         if (actionId === 'edit' && rowId) this.saveContext(list.map((e) => (e.id === rowId ? { ...e, ...entry } : e)));
         else this.saveContext([...list, { id: randomUUID(), enabled: true, ...entry }]);
         return '';

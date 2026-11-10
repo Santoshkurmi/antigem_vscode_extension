@@ -2,9 +2,13 @@
 // agent works, the floating scroll button, and the empty / loading / error states.
 import { batch, createEffect, createMemo, createRoot, createSignal, For, Match, on, onCleanup, onMount, Show, Switch } from 'solid-js';
 import type { ChatMessage } from '@shared/model';
-import { agentStatus, awaitingReply, enabledAgents, messages, pickAgent, send, setAwaitingReply, state } from '../state/store';
+import { agentStatus, awaitingReply, enabledAgents, messages, pickAgent, send, setAwaitingReply, setComposerInsert, state } from '../state/store';
 import { AssistantMessage, SummaryCard, UserBubble, WaveDivider } from './Messages';
 import { WorkingSpinner } from './WorkingSpinner';
+import { AgentSetupPrompt as SetupCard, notInstalledText } from './AgentSetup';
+import { JarvisChatWelcome, JarvisEventCard } from './JarvisCommand';
+import { jarvisDraft } from '../state/jarvis';
+import { openAgentSettings } from '../state/settings';
 import { AgentMark, AgentPicker } from './AgentStatus';
 import { Fade, Icon } from '../ui/primitives';
 import { fontScale } from '../theme';
@@ -301,6 +305,10 @@ function MessageItem(props: { id: string; recent: boolean }) {
       {(msg) => (
         <div class="msg" classList={{ cv: !props.recent }}>
           <Switch>
+            {/* Jarvis' news to a Jarvis chat: the app's event card instead of a user bubble */}
+            <Match when={msg().role === 'USER' && msg().jarvisEvents?.length}>
+              <JarvisEventCard content={msg().content} events={msg().jarvisEvents!} />
+            </Match>
             <Match when={msg().role === 'USER'}>
               <UserBubble msg={msg()} />
             </Match>
@@ -338,48 +346,78 @@ function EmptyChat() {
         <Show
           when={notReady()}
           fallback={
-            <>
-              <div class="empty-title">How can I help you today?</div>
-              <div class="empty-sub">Ask a question, brainstorm ideas, or start coding</div>
-            </>
+            <Show
+              when={jarvisDraft() && !state.chat.conversationId}
+              fallback={
+                <>
+                  <div class="empty-title">How can I help you today?</div>
+                  <div class="empty-sub">Ask a question, brainstorm ideas, or start coding</div>
+                </>
+              }
+            >
+              {/* a chat opened with "New Jarvis chat": the welcome with its starters (a tap puts one in the box) */}
+              <JarvisChatWelcome onStarter={(text) => setComposerInsert({ text, replace: true, n: Date.now() })} />
+            </Show>
           }
         >
-          <AgentSetupPrompt />
+          <AgentNotReady />
         </Show>
       </div>
     </div>
   );
 }
 
-/** AgentSetupPrompt: the agent is not ready (starting, offline, not installed). */
-function AgentSetupPrompt() {
+/** The agent is not ready (ChatScreen's AgentSetupPrompt): starting, not installed (Install → its setup page), down. */
+function AgentNotReady() {
   const agent = () => state.chat.agent;
   const s = () => agentStatus(agent());
-  const title = () => {
-    switch (s()?.state) {
-      case 'starting':
-        return `Starting ${agentLabel(agent())}…`;
-      case 'not_installed':
-        return `${agentLabel(agent())} is not installed`;
-      default:
-        return `${agentLabel(agent())} is unavailable`;
-    }
+  const setup = () => {
+    const page = s()?.setupPage;
+    openAgentSettings(agent(), page && page !== agent().toLowerCase() ? { id: page, title: 'Setup' } : undefined);
   };
-  const message = () =>
-    s()?.state === 'starting'
-      ? 'Waiting for the server to come up. This takes a few seconds.'
-      : s()?.detail ?? 'The agent is not running.';
   return (
-    <div class="setup-prompt">
-      <AgentMark agent={agent()} size={60} statusColor={stateColor(s()?.state)} />
-      <div class="setup-title">{title()}</div>
-      <div class="setup-msg">{message()}</div>
-      <Show when={s()?.state !== 'starting'}>
-        <button class="filled-btn" style={{ background: agentAccent(agent()) }} onClick={() => send({ type: 'retryConnections' })}>
-          Retry
-        </button>
-      </Show>
-    </div>
+    <Switch
+      fallback={
+        <SetupCard
+          agent={agent()}
+          title={`${agentLabel(agent())} is unavailable`}
+          text={s()?.detail ?? 'The agent is not running.'}
+          actionLabel="Retry"
+          onAction={() => send({ type: 'retryConnections' })}
+          secondaryLabel="Open settings"
+          onSecondary={setup}
+          statusColor={stateColor(s()?.state)}
+        />
+      }
+    >
+      <Match when={s()?.state === 'starting'}>
+        <SetupCard
+          agent={agent()}
+          title={`Starting ${agentLabel(agent())}...`}
+          text={s()?.detail && !/^starting/i.test(s()!.detail!) ? s()!.detail! : 'Waiting for the server to come up. This takes a few seconds.'}
+          actionLabel=""
+          onAction={() => {}}
+          statusColor={stateColor('starting')}
+        />
+      </Match>
+      <Match when={s()?.state === 'not_installed'}>
+        {(() => {
+          const t = notInstalledText(agent());
+          return (
+            <SetupCard
+              agent={agent()}
+              title={t.title}
+              text={t.text}
+              actionLabel={t.action}
+              onAction={setup}
+              secondaryLabel={t.secondary === 'Check again' ? t.secondary : undefined}
+              onSecondary={() => send({ type: 'retryConnections' })}
+              statusColor={t.statusColor}
+            />
+          );
+        })()}
+      </Match>
+    </Switch>
   );
 }
 

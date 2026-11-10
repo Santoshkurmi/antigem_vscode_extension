@@ -73,6 +73,7 @@ export class BridgeManager {
 
   /** Authenticated request to the bridge. */
   async fetch(p: string, init: RequestInit = {}): Promise<Response> {
+    if (this.suspended) throw new Error('AntiGem is turned off — press Reconnect to start it');
     const headers = { ...(init.headers as Record<string, string> | undefined), ...this.authHeaders() };
     return fetch(this.baseUrl + p, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(15_000) });
   }
@@ -105,7 +106,20 @@ export class BridgeManager {
     }
   }
 
+  /** Turned off by the user (drawer ⏻): nothing starts the bridge again until resume(). */
+  suspended = false;
+
+  async powerOff() {
+    this.suspended = true;
+    await this.shutdown();
+  }
+
+  resume() {
+    this.suspended = false;
+  }
+
   ensureRunning(): Promise<void> {
+    if (this.suspended) return Promise.reject(new Error('AntiGem is turned off — press Reconnect to start it'));
     if (this.state === 'running') return Promise.resolve();
     if (!this.starting) {
       this.starting = this.doStart().finally(() => {

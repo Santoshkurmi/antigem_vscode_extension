@@ -329,14 +329,25 @@ export class OpenCodeBackend implements AgentBackend {
   /** The agent row (port of the app's openCodeStatusEntry). */
   status(): AgentStatus {
     const st = this.ocStatus;
-    const row = (state: AgentStatus['state'], detail: string | null): AgentStatus => ({ kind: 'OPENCODE', label: 'OpenCode', state, detail });
+    // no account of its own: each provider signs in on its own (Settings → OpenCode → Providers)
+    const version = st?.installed && st.version ? st.version.replace(/^v/, '') : null;
+    const row = (state: AgentStatus['state'], detail: string | null): AgentStatus => ({
+      kind: 'OPENCODE',
+      label: 'OpenCode',
+      state,
+      detail,
+      account: null,
+      version,
+      plan: null,
+      setupPage: 'opencode.cli',
+    });
     switch (this.ocState) {
       case 'ready':
         return row('online', [st?.version ? `OpenCode ${st.version}` : null, st?.running ? 'running' : 'starts with the first message'].filter(Boolean).join(' · '));
       case 'checking':
         return row('starting', 'Starting… waiting for the bridge.');
       case 'not_installed':
-        return row('not_installed', 'OpenCode is not installed yet. Install it in Settings → OpenCode → Install & update.');
+        return row('not_installed', 'OpenCode is not installed yet. Install it from Settings → OpenCode → OpenCode CLI.');
       case 'disabled':
         return row('error', 'The bridge was started with OpenCode off.');
       case 'outdated':

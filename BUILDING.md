@@ -2,6 +2,8 @@
 
 This document is for reviewers and contributors. It explains how the native Go bridge binary is produced and how the per-platform VSIX packages are built.
 
+For what the extension runs, which ports, files and network it uses, and where each part of the source lives, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## What ships in the extension
 
 - `dist/extension.js` + `dist/webview/**` — the extension host and webview UI (built by esbuild + Vite).
@@ -109,6 +111,33 @@ Caveats:
 - Recommended only for local/personal builds, not for Marketplace publishing. Shipped binaries in this repo's
   releases are **not** UPX-compressed.
 
+## The AntiGem Chrome extension
+
+Plain MV3 files, no build step. It is **its own repository**, checked out next to this one as
+`../antigem-chrome-extension` (or set `ANTIGEM_CHROME_EXTENSION=<folder>`). `npm run build:host` (`esbuild.mjs`) copies
+it into `dist/chrome-extension`, which the VSIX ships; it warns and leaves it out when the folder is missing. In the app,
+Settings → Browser copies it on to `~/.antigem/chrome-extension` (stable across extension updates) for *Load unpacked*
+and registers the native messaging host. The dev server and `dev/test-browser-e2e.ts` use the sibling folder directly.
+
+- **Extension id** `kbdjcdlfeoijcchepbldpldeaeijgibi`, pinned by the public `key` in its `manifest.json`
+  (`src/core/browser/constants.ts` must match). The private key is **not** in the repo: `~/.antigem/chrome-extension.pem`
+  (PKCS#8, made once with node crypto). Lose it and a packed/Web Store build gets another id.
+- **Native host** `com.antigem.browser_bridge` = `bin/antigem-bridge-<platform>-<arch> --native-host` (wrapper
+  `~/.antigem/chrome/antigem-native-host`), relaying Chrome's stdin/stdout to the VS Code window's Unix socket
+  (`$XDG_RUNTIME_DIR/antigem/browser.sock`, else `~/.antigem/run/browser.sock`; `ANTIGEM_BROWSER_SOCKET` overrides).
+  Windows is not supported yet.
+- **Pack a CRX later** (same id as the unpacked one):
+
+```sh
+google-chrome --pack-extension="$PWD/../antigem-chrome-extension" --pack-extension-key="$HOME/.antigem/chrome-extension.pem"
+# -> antigem-chrome-extension.crx next to the folder. For the Chrome Web Store, zip the folder instead (remove "key" if the
+#    store assigns its own id, then put that id in constants.ts and the host manifest's allowed_origins).
+```
+
+- **Tests**: `dev/test-browser.ts` (offline: framing, socket, routing, schemas) and `dev/test-browser-e2e.ts` (a throwaway
+  Chrome for Testing profile with the native host manifest inside `<user-data-dir>/NativeMessagingHosts`, every tool
+  against a local page and example.com; see the header of each file for the command).
+
 ## Related projects
 
 - This extension is the VS Code port of the **AntiGem Android app**: https://github.com/santoshkurmi/antigem
@@ -122,5 +151,5 @@ just hosts them inside VS Code instead of on a phone.
 - The bridge listens on `127.0.0.1` only (configurable port, default 1244).
 - All requests require a CSRF token from `~/.antigem_bridge/csrf_token.txt`.
 - The agy hub is started with its standard `x-codeium-csrf-token` header; the agy binary is never patched (`--no-agy-patch`).
-- No code is downloaded at runtime; every binary is shipped inside the VSIX.
+- Every AntiGem binary ships inside the VSIX. The only code downloaded at runtime is what the user asks for: official agent CLI installers (Install / Update buttons) and plugins the user installs.
 - Source code is included in the package for verification.

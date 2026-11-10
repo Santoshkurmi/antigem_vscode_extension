@@ -6,7 +6,7 @@ import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { ChoiceQuestionnaire, ToolCall } from '@shared/model';
 import { Collapse, Dialog, Icon, IconButton, type IconName } from '../ui/primitives';
 import { alpha, formatDuration } from '../util/format';
-import { copyText, readImage, send, sendMessage, state, stop } from '../state/store';
+import { copyText, openConversation, readImage, send, sendMessage, state, stop } from '../state/store';
 import { DiffView, looksLikeDiff } from './CodeBlock';
 import { openImageViewer } from './Media';
 import { createResource } from 'solid-js';
@@ -96,6 +96,8 @@ function ToolRow(props: { call: ToolCall }) {
 
   const type = () => t().toolType;
   const isSystem = () => type() === 'SYSTEM_NOTIFICATION' || t().name === 'system_notice';
+  // a subagent run (Claude Agent / Task): not a shell command, so it is not labelled "Ran bash"
+  const isSubagent = () => !!t().subagentConversationId || (t().interactionType === 'claude' && (t().name === 'Agent' || t().name === 'Task'));
   const status = () => t().status;
   const pendingApproval = () => status() === 'PENDING_APPROVAL';
   const running = () => status() === 'RUNNING';
@@ -111,6 +113,7 @@ function ToolRow(props: { call: ToolCall }) {
     if (pendingApproval()) return ty === 'MCP' ? 'Approve MCP:' : 'Approve Command:';
     if (running()) {
       if (isSystem()) return 'System event...';
+      if (isSubagent()) return 'Subagent working...';
       switch (ty) {
         case 'SEARCH_WEB':
           return 'Searching web...';
@@ -137,6 +140,7 @@ function ToolRow(props: { call: ToolCall }) {
     }
     if (success()) {
       if (isSystem()) return 'System:';
+      if (isSubagent()) return 'Subagent';
       switch (ty) {
         case 'SEARCH_WEB':
           return 'Web search';
@@ -182,6 +186,7 @@ function ToolRow(props: { call: ToolCall }) {
 
   const toolIcon = (): IconName => {
     if (isSystem()) return /timer|schedule/i.test(t().command) ? 'schedule' : 'notifications';
+    if (isSubagent()) return 'smart_toy';
     switch (type()) {
       case 'SEARCH_WEB':
         return 'search';
@@ -329,6 +334,20 @@ function ToolRow(props: { call: ToolCall }) {
         <span class="tool-cmd" classList={{ mono: monoCommand() }}>
           {t().command}
         </span>
+        {/* a Claude Agent / Task card: its subagent's own chat */}
+        <Show when={t().subagentConversationId}>
+          <span
+            class="tool-open-sub"
+            role="button"
+            title="Open subagent"
+            onClick={(e) => {
+              e.stopPropagation();
+              openConversation(t().subagentConversationId!);
+            }}
+          >
+            <Icon name="open_in_new" size={14} />
+          </span>
+        </Show>
         {/* the running command's stop button (AgentToolCallCard.kt: BASH only) */}
         <Show when={running() && type() === 'BASH'}>
           <span class="tool-stop" role="button" title="Stop command" onClick={terminate}>

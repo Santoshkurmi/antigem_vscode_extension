@@ -3,6 +3,7 @@
 import './dev/vscodeEmulation';
 import './dev/installMock';
 import './vscodeReset';
+import './state/jarvis';
 import { render } from 'solid-js/web';
 import { App } from './App';
 import { initTheme } from './theme';
@@ -19,6 +20,10 @@ import './styles/settings.css';
 import './styles/media.css';
 import './styles/context.css';
 import './styles/accounts.css';
+import './styles/agentsetup.css';
+import './styles/notes.css';
+import './styles/jarvis.css';
+import './styles/jarvispanel.css';
 
 initTheme();
 let root = document.getElementById('root');

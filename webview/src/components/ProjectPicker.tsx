@@ -90,6 +90,19 @@ export function ProjectPicker() {
               <IconButton icon="close_o" size={32} iconSize={18} color={alpha('var(--on-surface-variant)', 0.8)} title="Close" onClick={close} />
             </div>
             <div class="proj-list" ref={list}>
+              {/* the VS Code window's own folder(s) first: a new chat uses it unless another one is picked */}
+              <For each={(projects() ?? []).filter((p) => p.source === 'workspace')}>
+                {(p) => (
+                  <ProjectRow
+                    selected={samePath(active(), p.uri)}
+                    current
+                    name={`Current folder · ${p.name || p.path.substring(p.path.lastIndexOf('/') + 1)}`}
+                    detail={p.path}
+                    meta={[p.chats ? `${p.chats} chat${p.chats === 1 ? '' : 's'}` : null, p.lastUsed ? relativeTime(p.lastUsed) : null].filter(Boolean).join(' · ')}
+                    onClick={() => pick(p.uri)}
+                  />
+                )}
+              </For>
               <ProjectRow
                 selected={!active()}
                 general
@@ -98,14 +111,13 @@ export function ProjectPicker() {
                 onClick={() => pick(null)}
               />
               <Show when={projects()} fallback={<div class="proj-loading"><span class="head-spinner" /></div>}>
-                <For each={projects()!}>
+                <For each={projects()!.filter((p) => p.source !== 'workspace')}>
                   {(p) => (
                     <ProjectRow
                       selected={samePath(active(), p.uri)}
                       name={p.name || p.path.substring(p.path.lastIndexOf('/') + 1) || 'Workspace'}
                       detail={p.path}
                       meta={[
-                        p.source === 'workspace' ? 'Open in VS Code' : null,
                         p.chats ? `${p.chats} chat${p.chats === 1 ? '' : 's'}` : null,
                         p.lastUsed ? relativeTime(p.lastUsed) : null,
                       ]
@@ -132,6 +144,7 @@ export function ProjectPicker() {
 function ProjectRow(props: {
   selected: boolean;
   general?: boolean;
+  current?: boolean;
   name: string;
   detail: string;
   meta?: string;
@@ -140,8 +153,8 @@ function ProjectRow(props: {
 }) {
   return (
     <div class="proj-row" classList={{ on: props.selected }} role="button" tabIndex={0} onClick={props.onClick} onKeyDown={(e) => e.key === 'Enter' && props.onClick()}>
-      <span class="proj-icon" classList={{ round: !!props.general }}>
-        <Icon name={props.general ? 'public' : 'folder'} size={18} />
+      <span class="proj-icon" classList={{ round: !!props.general, current: !!props.current }}>
+        <Icon name={props.general ? 'public' : props.current ? 'folder_special' : 'folder'} size={18} />
       </span>
       <span class="proj-text">
         <span class="proj-name-row">

@@ -52,7 +52,10 @@ export function UserBubble(props: { msg: ChatMessage }) {
     let last = 0;
     for (const m of t.matchAll(/(^|\s)(\/[\w:.-]+)/g)) {
       const start = m.index! + m[1].length;
-      if (!known.has(m[2].toLowerCase())) continue;
+      // a plugin is listed as `/plu:<id>:`; `/plu:<id>` and `/plu:<id>:<skill>` are that plugin too
+      const tok = m[2].toLowerCase();
+      const plu = /^\/plu:([^:]+)(:.*)?$/.exec(tok);
+      if (!known.has(tok) && !(plu && (known.has(`/plu:${plu[1]}:`) || known.has(`/plu:${plu[1]}`)))) continue;
       if (start > last) parts.push({ t: t.substring(last, start), cmd: false });
       parts.push({ t: m[2], cmd: true });
       last = start + m[2].length;
@@ -223,7 +226,8 @@ function DocChip(props: { att: ChatAttachment }) {
 
 // ------------------------------------------------------------------------------------------------ assistant
 
-const THOUGHT_MARK = /<!-- thought|<thought/;
+// a thought marker at the start of a line (quoted in inline code it is text)
+const THOUGHT_MARK = /(^|\n)[ \t]*<(!--\s*)?thought/;
 
 /**
  * An assistant message: its thought (from thoughtText, as ChatFeedCache prepends it), its blocks, then the footer

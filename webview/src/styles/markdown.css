@@ -753,3 +753,19 @@ a.md-link:hover,
   white-space: nowrap;
   flex-shrink: 0;
 }
+.run-input {
+  white-space: pre;
+  overflow: auto;
+  max-height: 60vh;
+}
+.run-more {
+  margin-top: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: calc(12 * var(--sp));
+  font-weight: 600;
+  cursor: pointer;
+}

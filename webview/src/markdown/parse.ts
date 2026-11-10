@@ -219,6 +219,17 @@ function hash(s: string): string {
 }
 
 /**
+ * A marker the back ends emit (error, thought, tool call, tagged tool): it counts only at the start of its line, so the
+ * same text quoted inside inline code (`<!-- error -->…`) or in the middle of a sentence stays text.
+ */
+function atLineStart(re: RegExp, line: string): RegExpExecArray | null {
+  const t = line.trimStart();
+  if (!t.startsWith('<')) return null;
+  const m = re.exec(t);
+  return m && m.index === 0 ? m : null;
+}
+
+/**
  * Parses lines[from..] into blocks; `starts` gets each block's first line. Mirrors the app's parser branch by branch.
  * Orphan tool calls are NOT appended here (see finishBlocks).
  */
@@ -234,7 +245,7 @@ function parseLines(lines: string[], from: number, tools: ToolIndex, out: Block[
 
     if (line.includes('<')) {
       // structured agent error <!-- error -->…<!-- /error -->
-      if (ERROR_START.test(line)) {
+      if (atLineStart(ERROR_START, line)) {
         const closes = (l: string) => /<\/error>/i.test(l) || l.includes('<!-- /error -->');
         if (closes(line)) {
           const raw = line.replace(ERROR_START_G, '').replace(ERROR_END_G, '').trim();
@@ -263,7 +274,7 @@ function parseLines(lines: string[], from: number, tools: ToolIndex, out: Block[
       }
 
       // thought <!-- thought[:streaming][:duration] -->…<!-- /thought -->
-      const tm = THOUGHT_START.exec(line);
+      const tm = atLineStart(THOUGHT_START, line);
       if (tm) {
         const explicitStreaming = /:streaming/i.test(line) || / streaming/i.test(line);
         const dm = DURATION.exec(line);
@@ -299,7 +310,7 @@ function parseLines(lines: string[], from: number, tools: ToolIndex, out: Block[
       }
 
       // inline tool call marker <!-- tool_call:ID -->
-      const mm = TOOL_MARKER.exec(line);
+      const mm = atLineStart(TOOL_MARKER, line);
       if (mm) {
         const toolId = mm[1];
         const step = toolId.substring(toolId.lastIndexOf('_') + 1);
@@ -314,7 +325,7 @@ function parseLines(lines: string[], from: number, tools: ToolIndex, out: Block[
         continue;
       }
 
-      const um = UNIFIED_TOOL.exec(line);
+      const um = atLineStart(UNIFIED_TOOL, line);
       if (um) {
         const name = um[1].trim().toLowerCase();
         const payload = um[2].trim();
@@ -343,7 +354,7 @@ function parseLines(lines: string[], from: number, tools: ToolIndex, out: Block[
       ];
       let tagHit = false;
       for (const [re, fn] of tagged) {
-        const m = re.exec(line);
+        const m = atLineStart(re, line);
         if (!m) continue;
         const [name, cmd, status] = fn(m);
         const match = tools.calls.find(

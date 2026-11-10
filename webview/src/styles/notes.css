@@ -1,0 +1,706 @@
+/* ui/notes/NotesScreen.kt (components/Notes.tsx). Sizes: 1dp = 1px; text = sp × var(--sp).
+   Text without its own style inherits bodyLarge's 24sp line height and 0.5sp letter spacing (see base.css); the
+   BasicTextFields pass a bare TextStyle: no letter spacing, the font's own line height (Roboto ≈ 1.172). */
+
+/* The persistent screen over the chat: shown / hidden at once (graphicsLayer alpha 1 / 0, no animation) and kept alive
+   while hidden, so the open note, the scroll and the snackbar survive switching away. */
+.nt-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 58;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--on-background);
+  outline: none;
+}
+.nt-screen:focus-visible {
+  outline: none;
+}
+.nt-screen:not(.shown) {
+  visibility: hidden;
+  pointer-events: none;
+}
+.nt-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.nt-muted {
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+
+/* ------------------------------------------------------------------ IconButton (48dp target, 40dp state layer) */
+
+.nt-ib {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--on-background);
+}
+.nt-ib::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.nt-ib:hover::before {
+  opacity: 0.08;
+}
+.nt-ib:active::before {
+  opacity: 0.1;
+}
+.nt-ib > .icon {
+  position: relative;
+}
+
+/* ------------------------------------------------------------------ fields (PlainField) */
+
+.nt-field {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--on-surface);
+  caret-color: var(--primary);
+  font-family: inherit;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.172;
+}
+.nt-field::placeholder {
+  color: color-mix(in srgb, var(--on-surface) 35%, transparent);
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ list header */
+
+/* Surface(background, shadowElevation = 1.dp) */
+.nt-head {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  background: var(--background);
+  box-shadow:
+    0 2px 1px -1px rgba(0, 0, 0, 0.2),
+    0 1px 1px 0 rgba(0, 0, 0, 0.14),
+    0 1px 3px 0 rgba(0, 0, 0, 0.12);
+}
+.nt-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px;
+}
+.nt-title {
+  flex: 1;
+  min-width: 0;
+  padding-left: 4px;
+  font-size: calc(20 * var(--sp));
+  font-weight: 600;
+}
+.nt-search {
+  flex: 1;
+  width: auto;
+  font-size: calc(16 * var(--sp));
+}
+
+/* FilterChip row: horizontalScroll, padding 16 / 16 / bottom 8, 8dp apart */
+.nt-chips {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.nt-chips::-webkit-scrollbar {
+  display: none;
+}
+/* 48dp touch target around the 32dp chip */
+.nt-chip {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+}
+.nt-chip-box {
+  position: relative;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--outline-variant);
+  color: var(--on-surface-variant);
+  font-size: calc(14 * var(--sp));
+  font-weight: 500;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  white-space: nowrap;
+}
+.nt-chip.on .nt-chip-box {
+  border-color: transparent;
+  background: var(--nt-secondary-container);
+  color: var(--nt-on-secondary-container);
+}
+.nt-chip-box::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.nt-chip:hover .nt-chip-box::before {
+  opacity: 0.08;
+}
+.nt-chip:active .nt-chip-box::before {
+  opacity: 0.1;
+}
+
+/* ------------------------------------------------------------------ list */
+
+.nt-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+/* LazyColumn: contentPadding 16 / 16 / top 12 / bottom 96, 10dp apart */
+.nt-list {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 96px;
+}
+.nt-section {
+  flex-shrink: 0;
+  padding: 4px 0 0 4px;
+  font-size: calc(11 * var(--sp));
+  font-weight: 600;
+  letter-spacing: calc(0.8 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+
+/* NoteCard: Surface(14dp corners, surface, 0.5dp border onSurface 12%), padding 14, 6dp apart */
+.nt-card {
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 14dp inside the border (Compose draws the border within the shape) */
+  padding: 13.5px;
+  border: 0.5px solid color-mix(in srgb, var(--on-surface) 12%, transparent);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--on-surface);
+  text-align: left;
+}
+.nt-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--on-surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms linear;
+}
+.nt-card:hover::after {
+  opacity: 0.08;
+}
+.nt-card:active::after {
+  opacity: 0.1;
+}
+.nt-card-head,
+.nt-card-item,
+.nt-card-foot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.nt-card-kind {
+  margin-right: 6px;
+}
+.nt-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(15 * var(--sp));
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nt-card-title.blank {
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.nt-card-item > .icon {
+  margin-right: 8px;
+}
+.nt-card-item-text {
+  min-width: 0;
+  font-size: calc(13 * var(--sp));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--on-surface) 85%, transparent);
+}
+.nt-card-item-text.done {
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+  text-decoration: line-through;
+}
+.nt-card-more {
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.nt-card-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: calc(13 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 75%, transparent);
+}
+.nt-card-time {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+.nt-card-count {
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+.nt-card-count.all {
+  color: var(--primary);
+}
+
+/* EmptyState: centered, padding 32 */
+.nt-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+.nt-empty-icon {
+  margin-bottom: 12px;
+  color: color-mix(in srgb, var(--on-surface) 30%, transparent);
+}
+.nt-empty-msg {
+  margin-bottom: 4px;
+  font-size: calc(15 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.nt-empty-hint {
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 45%, transparent);
+}
+
+/* FloatingActionButton: 56dp, 16dp corners, primary / onPrimary, 6dp shadow (8dp hovered); 20dp from the corner */
+.nt-fab-wrap {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2;
+}
+.nt-fab {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.2),
+    0 6px 10px 0 rgba(0, 0, 0, 0.14),
+    0 1px 18px 0 rgba(0, 0, 0, 0.12);
+  transition: box-shadow 150ms var(--fast-out-slow-in);
+}
+.nt-fab::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.nt-fab:hover {
+  box-shadow:
+    0 5px 5px -3px rgba(0, 0, 0, 0.2),
+    0 8px 10px 1px rgba(0, 0, 0, 0.14),
+    0 3px 14px 2px rgba(0, 0, 0, 0.12);
+}
+.nt-fab:hover::before {
+  opacity: 0.08;
+}
+.nt-fab:active::before {
+  opacity: 0.1;
+}
+.nt-fab > .icon {
+  position: relative;
+}
+
+/* ------------------------------------------------------------------ DropdownMenu items (Material3 defaults) */
+
+.menu.nt-menu {
+  max-width: 280px;
+}
+.nt-mi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 48px;
+  padding: 0 12px;
+  font-size: calc(14 * var(--sp));
+  font-weight: 500;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  white-space: nowrap;
+  color: var(--on-surface);
+  transition: background-color 100ms;
+}
+.nt-mi:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+.nt-mi-icon {
+  color: var(--on-surface-variant);
+}
+.nt-mi-text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.nt-mi:disabled,
+.nt-mi:disabled .nt-mi-icon {
+  color: color-mix(in srgb, var(--on-surface) 38%, transparent);
+}
+.nt-mi.danger,
+.nt-mi.danger .nt-mi-icon {
+  color: var(--error);
+}
+/* HorizontalDivider: 1dp outlineVariant */
+.nt-menu-divider {
+  height: 1px;
+  background: var(--outline-variant);
+}
+
+/* ------------------------------------------------------------------ editor */
+
+.nt-ed-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  background: var(--background);
+}
+.nt-spacer {
+  flex: 1;
+}
+/* verticalScroll, padding horizontal 20 / bottom 24 */
+.nt-ed-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px 24px;
+}
+.nt-ed-title {
+  flex-shrink: 0;
+  padding: 8px 0;
+  font-size: calc(22 * var(--sp));
+  font-weight: 600;
+}
+.nt-ed-text {
+  flex-shrink: 0;
+  padding: 6px 0;
+  overflow: hidden;
+  font-size: calc(16 * var(--sp));
+  line-height: calc(24 * var(--sp));
+}
+.nt-ed-gap {
+  flex-shrink: 0;
+  height: 4px;
+}
+.nt-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+.nt-item {
+  flex: 1;
+  width: auto;
+  font-size: calc(16 * var(--sp));
+}
+.nt-item.done {
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+.nt-item.done:not(:placeholder-shown) {
+  text-decoration: line-through;
+}
+
+/* Checkbox: 48dp target, 40dp state layer, 20dp box with 2dp corners and a 2dp border; box color 50 ms in / 100 ms
+   out, the check draws in 100 ms and stays 100 ms when unchecked */
+.nt-check {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--on-surface);
+}
+.nt-check.on {
+  color: var(--primary);
+}
+.nt-check::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.nt-check:hover::before {
+  opacity: 0.08;
+}
+.nt-check:active::before {
+  opacity: 0.1;
+}
+.nt-check-box {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border-radius: 2px;
+  border: 2px solid var(--on-surface-variant);
+  transition:
+    background-color 100ms linear,
+    border-color 100ms linear;
+}
+.nt-check.on .nt-check-box {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  transition-duration: 50ms;
+}
+.nt-check-mark {
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  fill: none;
+  stroke: var(--on-primary);
+  stroke-width: 2;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-dasharray: 17;
+  stroke-dashoffset: 17;
+  visibility: hidden;
+  transition:
+    stroke-dashoffset 0s linear 100ms,
+    visibility 0s linear 100ms;
+}
+.nt-check.on .nt-check-mark {
+  stroke-dashoffset: 0;
+  visibility: visible;
+  transition: stroke-dashoffset 100ms linear;
+}
+
+/* IconButton(Modifier.size(36.dp)) with an 18dp Close in the muted color */
+.nt-rm {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--on-background);
+}
+.nt-rm::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.nt-rm:hover::before {
+  opacity: 0.08;
+}
+.nt-rm:active::before {
+  opacity: 0.1;
+}
+.nt-rm > .icon {
+  position: relative;
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+
+/* "Add item": full-width clickable row, padding vertical 10; Add 20dp with 12dp either side */
+.nt-add {
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 10px 0;
+  color: var(--on-background);
+}
+.nt-add::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms linear;
+}
+.nt-add:hover::after {
+  opacity: 0.08;
+}
+.nt-add:active::after {
+  opacity: 0.1;
+}
+.nt-add-icon {
+  margin: 0 12px;
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.nt-add-text {
+  font-size: calc(15 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.nt-progress {
+  flex-shrink: 0;
+  padding-top: 4px;
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 60%, transparent);
+}
+.nt-edited {
+  flex-shrink: 0;
+  margin-top: 16px;
+  font-size: calc(11 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 50%, transparent);
+}
+
+/* ------------------------------------------------------------------ snackbar (Material3 Snackbar in the Scaffold) */
+
+.nt-snack-host {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: grid;
+  justify-items: center;
+  pointer-events: none;
+}
+/* 12dp around, at most 600dp wide, 48dp tall on one line; text 16dp from the start, the action 8dp from the end */
+.nt-snack {
+  grid-area: 1 / 1;
+  align-self: end;
+  width: calc(100% - 24px);
+  max-width: 600px;
+  min-height: 48px;
+  margin: 12px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 16px;
+  border-radius: 4px;
+  background: var(--inverse-surface);
+  color: var(--inverse-on-surface);
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.2),
+    0 6px 10px 0 rgba(0, 0, 0, 0.14),
+    0 1px 18px 0 rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity 75ms linear,
+    transform 75ms var(--fast-out-slow-in);
+}
+.nt-snack.shown {
+  pointer-events: auto;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 150ms linear var(--nt-snack-delay, 0ms),
+    transform 150ms var(--fast-out-slow-in) var(--nt-snack-delay, 0ms);
+}
+.nt-snack-text {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  font-size: calc(14 * var(--sp));
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.25 * var(--sp));
+}
+/* TextButton in inversePrimary, labelLarge */
+.nt-snack-action {
+  position: relative;
+  flex-shrink: 0;
+  min-width: 58px;
+  height: 40px;
+  margin: 4px 0 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 20px;
+  font-size: calc(14 * var(--sp));
+  font-weight: 500;
+  line-height: calc(20 * var(--sp));
+  letter-spacing: calc(0.1 * var(--sp));
+  color: var(--nt-inverse-primary);
+}
+.nt-snack-action::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.nt-snack-action:hover::before {
+  opacity: 0.08;
+}
+.nt-snack-action:active::before {
+  opacity: 0.1;
+}

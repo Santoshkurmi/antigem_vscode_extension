@@ -251,7 +251,14 @@ function AccountSection(props: { status: AgentStatus; actions: SectionAction[] }
           .map((t) => t.trim())
           .filter((t) => t && t !== s().account && t !== 'Signed in')
       : [];
-  const facts = () => readyParts().filter((t) => t.length <= 32);
+  // the app's facts: the plan (when signed in) and "CLI <version>"; older hosts only had them in the detail line
+  const facts = () => {
+    const st = s();
+    const v = st.version?.trim() ? `CLI ${(/\d+(\.\d+)+\S*/.exec(st.version) ?? [st.version.trim()])[0]}` : null;
+    const plan = isReady(st) ? st.plan?.trim() || null : null;
+    if (v || st.plan) return [plan, v].filter((x): x is string => !!x);
+    return readyParts().filter((t) => t.length <= 32);
+  };
   const subtitle = () => {
     const st = s();
     if (!isReady(st)) return st.detail || null;

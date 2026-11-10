@@ -30,6 +30,7 @@ import type {
 } from '@shared/protocol';
 import { host } from '../host';
 import { patchUiPrefs, setUiPrefsSignal, uiPrefs } from '../theme';
+import { jarvisDraft, setJarvisDraft } from './jarvis';
 
 export interface ChatState {
   conversationId: string | null;
@@ -50,6 +51,8 @@ export interface ChatState {
   notice: string | null;
   /** The chat's own model (per-chat model agents): the model pill prefers it. */
   modelId: string | null;
+  /** Set for a chat that takes no prompts here (a Claude subagent's): the composer becomes a bar with this text. */
+  readOnly: string | null;
   /** Prompts sent from this view that the host has not listed yet (shown right away). */
   pending: ChatMessage[];
   /** Bumped when the user sends: the feed jumps to the end. */
@@ -105,6 +108,7 @@ function emptyChat(conversationId: string | null, agent: AgentKind): ChatState {
     controls: [],
     notice: null,
     modelId: null,
+    readOnly: null,
     pending: [],
     sentTick: 0,
   };
@@ -150,6 +154,15 @@ const listeners = {
   image: new Map<string, (d: string | null) => void>(),
   chatSearch: new Map<string, (r: ChatSearchHit[]) => void>(),
 };
+
+/** No agents chosen yet (init.firstRun): the first-run agent picker covers the view. */
+export const [firstRun, setFirstRun] = createSignal(false);
+
+/** The first-run choice: the agents to run (the host restarts with them and sends the agents again). */
+export function chooseFirstAgents(agents: AgentKind[]) {
+  send({ type: 'settingChange', page: 'agents', id: 'agents.enabled', value: agents });
+  setFirstRun(false);
+}
 
 /** The VS Code editor's active file / selection (the composer's offer chip). */
 export const [editorContext, setEditorContext] = createSignal<EditorContextView | null>(null);
@@ -240,6 +253,7 @@ function applyChat(conversationId: string | null, patch: ChatPatch) {
     if (patch.controls) setState('chat', 'controls', reconcile(patch.controls, { key: 'id' }));
     if (patch.notice !== undefined) setState('chat', 'notice', patch.notice);
     if (patch.modelId !== undefined) setState('chat', 'modelId', patch.modelId);
+    if (patch.readOnly !== undefined) setState('chat', 'readOnly', patch.readOnly ?? null);
   });
 }
 
@@ -254,6 +268,7 @@ function onHostMessage(msg: HostToView) {
           workspaceUri: msg.workspaceFolders[0]?.uri ?? null,
           defaultAgent: msg.defaultAgent,
         });
+        setFirstRun(!!msg.firstRun);
         if (!state.chat.conversationId && !state.chat.order.length) {
           setState('chat', emptyChat(msg.conversationId, msg.defaultAgent));
           if (msg.conversationId) setState('chat', 'isLoading', true);
@@ -386,6 +401,7 @@ export function goBackConversation() {
 
 export function openConversation(id: string, keepBackStack = false) {
   if (!keepBackStack) setChatBackStack([]);
+  setJarvisDraft(null);
   if (id === state.chat.conversationId) return;
   const conv = state.conversations.find((c) => c.id === id) ?? null;
   batch(() => {
@@ -425,6 +441,9 @@ function uuid(): string {
 
 export function currentModelId(agent: AgentKind = state.chat.agent): string | null {
   const m = state.models[agent];
+  // the chat's own model (per-chat model agents, a Jarvis draft's preselected model) first
+  const own = agent === state.chat.agent ? state.chat.modelId : null;
+  if (own && (!m || m.models.some((x) => x.id === own || x.key === own))) return own;
   return m?.selectedId ?? m?.models.find((x) => x.isDefault)?.id ?? null;
 }
 
@@ -456,6 +475,8 @@ export function sendMessage(text: string, attachments: ChatAttachment[]) {
       awaitTimer = window.setTimeout(() => setAwaitingReply(false), 10_000);
     }
   });
+  // the first message of a chat opened with "New Jarvis chat" makes it a Jarvis chat
+  const jarvisFirst = isNew && !!jarvisDraft();
   send({
     type: 'send',
     conversationId,
@@ -465,7 +486,9 @@ export function sendMessage(text: string, attachments: ChatAttachment[]) {
     attachments,
     modelId: currentModelId(agent),
     workspaceUri: chatWorkspaceUri() ?? newChatProjectUri(),
+    ...(jarvisFirst ? { jarvis: true } : {}),
   });
+  if (jarvisFirst) setJarvisDraft(null);
 }
 
 // ------------------------------------------------------------------------------------------------ projects

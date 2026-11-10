@@ -5,6 +5,7 @@ import { createEffect, createSignal, on, onCleanup, Show } from 'solid-js';
 import { agentStatus, send, state } from '../state/store';
 import { agentLabel } from '../util/format';
 import { Collapse, Icon } from '../ui/primitives';
+import { openAgentSettings } from '../state/settings';
 
 export function ConnectionBanner() {
   const status = () => agentStatus(state.chat.agent);
@@ -24,7 +25,13 @@ export function ConnectionBanner() {
   );
   onCleanup(() => clearTimeout(timer));
   const connecting = () => retrying() || status()?.state === 'starting';
-  const visible = () => state.chat.order.length > 0 && (down() || connecting()) && !!status();
+  // not installed (any more): the way to install it, never an error bubble
+  const missing = () => status()?.state === 'not_installed';
+  const visible = () => state.chat.order.length > 0 && (down() || connecting() || missing()) && !!status();
+  const install = () => {
+    const page = status()?.setupPage;
+    openAgentSettings(state.chat.agent, page && page !== state.chat.agent.toLowerCase() ? { id: page, title: 'Setup' } : undefined);
+  };
   const name = () => agentLabel(state.chat.agent);
   const reconnect = () => {
     setRetrying(true);
@@ -40,16 +47,22 @@ export function ConnectionBanner() {
             <span class="conn-spinner" />
           </Show>
           <span class="conn-text">
-            {connecting() ? `Connecting to ${name()}...` : `${name()} Disconnected`}
-            <Show when={!connecting() && status()?.detail}>
+            {connecting() ? `Connecting to ${name()}...` : missing() ? `${name()} is not installed` : `${name()} Disconnected`}
+            <Show when={!connecting() && !missing() && status()?.detail}>
               <span class="conn-detail"> · {status()!.detail}</span>
             </Show>
           </span>
         </span>
-        <Show when={!connecting()}>
+        <Show when={!connecting() && !missing()}>
           <button class="conn-retry" onClick={reconnect}>
             <Icon name="refresh_f" size={13} />
             Reconnect
+          </button>
+        </Show>
+        <Show when={missing()}>
+          <button class="conn-retry" onClick={install}>
+            <Icon name="download" size={13} />
+            Install
           </button>
         </Show>
       </div>

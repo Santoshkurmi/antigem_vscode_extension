@@ -12,6 +12,7 @@ import {
   searchFiles,
   send,
   newChat,
+  openConversation,
   sendMessage,
   setComposerInsert,
   setIncomingAttachments,
@@ -140,6 +141,34 @@ const appCommand = (cmd: string) => {
   return AGENT_APP_COMMANDS[state.chat.agent]?.[k] ?? APP_COMMANDS[k];
 };
 
+/**
+ * `/plu:` suggestions like the app (PromptExpansion.kt; the host's pluginSuggestions): before a second colon only the
+ * plugins (`/plu:<id>:`, or `/plu:<id>` for one without skills), matched on id and name; after it that plugin's skills
+ * (`/plu:<id>:<skill>`), led by the plugin on its own while no skill is typed.
+ */
+function pluginItems(all: SlashCommandView[], afterPlu: string): SlashCommandView[] {
+  const plugins = all.filter((c) => c.kind === 'plugin' && /^\/plu:[^:\s]+:?$/i.test(c.command));
+  const has = (s: string | null | undefined, q: string) => !!s && s.toLowerCase().includes(q.toLowerCase());
+  const idOf = (c: SlashCommandView) => c.command.replace(/^\/plu:/i, '').replace(/:$/, '');
+  const colon = afterPlu.indexOf(':');
+  if (colon < 0) {
+    const q = afterPlu.trim();
+    return plugins.filter((c) => !q || has(idOf(c), q) || has(c.pluginName, q) || has(c.description, q));
+  }
+  const id = afterPlu.slice(0, colon).toLowerCase();
+  const query = afterPlu.slice(colon + 1).trim();
+  const plugin = plugins.find((c) => idOf(c).toLowerCase() === id);
+  if (!plugin) return [];
+  const pid = idOf(plugin);
+  const name = plugin.pluginName || plugin.description?.split(' · ')[0] || pid;
+  const skills = all.filter((c) => {
+    const m = /^\/plu:([^:\s]+):(\S+)$/i.exec(c.command);
+    return c.kind === 'plugin' && !!m && m[1].toLowerCase() === id && (!query || has(m[2], query) || has(c.description, query));
+  });
+  const whole: SlashCommandView = { command: `/plu:${pid}`, description: `Use ${name} without a specific skill`, kind: 'plugin', pluginName: plugin.pluginName };
+  return query ? skills : [whole, ...skills];
+}
+
 function quotaColor(left: number) {
   return left > 0.5 ? 'var(--success)' : left > 0.2 ? 'var(--warning)' : 'var(--danger)';
 }
@@ -260,16 +289,21 @@ export function InputBar() {
         const i = ORDER.indexOf(c.kind ?? 'command');
         return i < 0 ? ORDER.length : i;
       };
-      const items = all
-        .filter(
-          (c) =>
-            !q ||
-            c.command.replace(/^\//, '').toLowerCase().includes(q) ||
-            (c.description ?? '').toLowerCase().includes(q),
-        )
-        .map((c, i) => ({ c, i }))
-        .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
-        .map((x) => x.c);
+      // `/plu:` browses plugins in two levels (PromptExpansion.kt): the plugins, then one plugin's skills
+      const items = q.startsWith('plu:')
+        ? pluginItems(all, query.slice(4))
+        : all
+            // a plugin's skills only show inside `/plu:<id>:` (the plugins themselves list here too)
+            .filter((c) => !(c.kind === 'plugin' && /^\/plu:[^:\s]+:\S+$/i.test(c.command)))
+            .filter(
+              (c) =>
+                !q ||
+                c.command.replace(/^\//, '').toLowerCase().includes(q) ||
+                (c.description ?? '').toLowerCase().includes(q),
+            )
+            .map((c, i) => ({ c, i }))
+            .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
+            .map((x) => x.c);
       const runs = (c: SlashCommandView) => !!c.runsOnTap && nothingBefore && !isRunning() && !attachments().length;
       if (!items.length) {
         setPopup(null);
@@ -313,6 +347,8 @@ export function InputBar() {
             const pos = (head + ins).length;
             ta.setSelectionRange(pos, pos);
             autosize();
+            // a plugin (`/plu:<id>:`): straight on to its skills
+            if (ins.endsWith(':')) updateTriggers();
           });
         },
       });
@@ -384,6 +420,18 @@ export function InputBar() {
         return;
       }
     }
+    // Ctrl+Enter (Cmd+Enter on a Mac) makes a new line, like Shift+Enter; Enter alone sends
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+      e.preventDefault();
+      const a = ta.selectionStart ?? text().length;
+      const b = ta.selectionEnd ?? a;
+      const v = text().substring(0, a) + '\n' + text().substring(b);
+      setText(v);
+      ta.value = v;
+      ta.setSelectionRange(a + 1, a + 1);
+      autosize();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       doSend();
@@ -407,17 +455,19 @@ export function InputBar() {
     const win = (re: RegExp) => g?.windows?.find((w) => re.test(w.label));
     const weekly = win(/7 ?d|week/i);
     const fiveH = win(/^5 ?h|five/i);
-    if (weekly && (quotaPillWindow() === '7d' || (!fiveH && m.quotaRemaining == null))) return { left: weekly.remaining, text: `7d ${pct(weekly.remaining)}` };
+    // the agent's own formatting of a window's share left wins ("48.8%" for Antigravity)
+    if (weekly && (quotaPillWindow() === '7d' || (!fiveH && m.quotaRemaining == null))) return { left: weekly.remaining, text: `7d ${weekly.text?.trim() || pct(weekly.remaining)}` };
     if (m.quotaRemaining != null) return { left: Math.max(0, Math.min(1, m.quotaRemaining)), text: m.quotaText ?? pct(m.quotaRemaining) };
     if (m.quotaText) {
       const n = parseFloat(m.quotaText);
       return { left: Number.isFinite(n) ? n / 100 : 1, text: m.quotaText };
     }
-    if (fiveH) return { left: fiveH.remaining, text: pct(fiveH.remaining) };
+    if (fiveH) return { left: fiveH.remaining, text: fiveH.text?.trim() || pct(fiveH.remaining) };
     return null;
   };
 
   return (
+    <Show when={!state.chat.readOnly} fallback={<ReadOnlyBar />}>
     <div class="input-bar">
       <QueuedCard />
       <div class="composer">
@@ -518,6 +568,34 @@ export function InputBar() {
           Do you want to stop the model from outputting? The current generation will be stopped immediately.
         </span>
       </Dialog>
+    </div>
+    </Show>
+  );
+}
+
+// ------------------------------------------------------------------------------------------------ read-only chats
+
+/**
+ * A chat that takes no prompts here (a Claude subagent's: it takes instructions from its parent chat only): the
+ * composer becomes a compact bar with the host's explanation and the way to the parent chat.
+ */
+function ReadOnlyBar() {
+  const parent = () => {
+    const id = state.chat.conversationId;
+    return state.chat.conversation?.parentConversationId ?? (id ? state.conversations.find((c) => c.id === id)?.parentConversationId : null) ?? null;
+  };
+  return (
+    <div class="input-bar">
+      <div class="readonly-bar">
+        <Icon name="call_split" size={17} class="readonly-icon" />
+        <span class="readonly-text">{state.chat.readOnly}</span>
+        <Show when={parent()}>
+          <button class="readonly-open" onClick={() => openConversation(parent()!)}>
+            <Icon name="open_in_new" size={15} />
+            Open parent chat
+          </button>
+        </Show>
+      </div>
     </div>
   );
 }

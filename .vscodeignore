@@ -4,13 +4,19 @@
 # Runtime (required)
 !dist/extension.js
 !dist/proto/**
+!dist/plugin-runtime/**
+!dist/plugin-sdk/**
 !dist/webview/**
+# the AntiGem Chrome extension, copied in by esbuild.mjs from ../antigem-chrome-extension (Settings → Browser)
+!dist/chrome-extension/**
 !bin/**
-!media/**
+# icons only (README screenshots are shown from GitHub; vsce lets a !pattern win over any exclude, so list what ships)
+!media/*
 # Manifest & docs
 !package.json
 !README.md
 !BUILDING.md
+!ARCHITECTURE.md
 !LICENSE
 # Source code (shipped for transparency / reviewer verification)
 !bridge/**

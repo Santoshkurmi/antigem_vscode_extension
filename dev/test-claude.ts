@@ -81,6 +81,8 @@ function describeItem(it: SettingItem): string {
       return `quota ${it.id}: ${it.groups.map((g) => `${g.name}{${(g.windows ?? []).map((w) => `${w.label} ${Math.round(w.remaining * 100)}% left${w.resetText ? ` ${w.resetText}` : ''}`).join(', ')}}`).join(' ')}`;
     case 'checklist':
       return `checklist ${it.id}: ${it.values.join(',')}`;
+    case 'presets':
+      return `presets ${it.id}: ${it.tiles.map((t) => `${t.name}${t.added ? ' (added)' : ''}`).join(', ')}`;
   }
 }
 

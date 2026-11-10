@@ -10,6 +10,7 @@ import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, Sen
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { cleanTitle, collapseExpansions, displayUserText } from '../text';
 import { ClaudeSession, type NewChatControls } from './ClaudeSession';
+import { ClaudeSubagentView, parseSubagentId, subagentConversationId, toSubagentInfo, type SubagentWire } from './ClaudeSubagent';
 import { questionnaireFrom } from './ClaudeTranscript';
 import { ClaudeSettings } from './ClaudeSettings';
 import { ALLOW_ONCE, PLAN_PREFIX, SUGGESTION_PREFIX } from './approvals';
@@ -66,6 +67,10 @@ export class ClaudeBackend implements AgentBackend {
   private sessions = new Map<string, ClaudeSession>();
   private convs = new Map<string, Conversation>();
   private localConvs = new Map<string, Conversation>();
+  /** Subagent runs of each chat (bridge list), their drawer rows (nested under the chat) and open views. */
+  private subLists = new Map<string, SubagentWire[]>();
+  private subConvs = new Map<string, Conversation>();
+  private subViews = new Map<string, ClaudeSubagentView>();
   sessionsLoaded = false;
   private changeListeners = new Set<(w: BackendChange) => void>();
 
@@ -157,7 +162,17 @@ export class ClaudeBackend implements AgentBackend {
 
   status(): AgentStatus {
     const a = this.cli?.auth;
-    return { kind: 'CLAUDE', label: 'Claude Code', state: this.runState, detail: this.runDetail, account: a?.loggedIn ? (a.email ?? null) : null };
+    return {
+      kind: 'CLAUDE',
+      label: 'Claude Code',
+      state: this.runState,
+      detail: this.runDetail,
+      account: a?.loggedIn ? (a.email ?? null) : null,
+      // "2.1.322 (Claude Code)" → "2.1.322", as the app's Accounts dialog
+      version: this.cli?.installed && this.cli.version ? this.cli.version.trim().split(/\s+/)[0] || null : null,
+      plan: a?.loggedIn && a.subscriptionType ? planLabel(a.subscriptionType) : null,
+      setupPage: 'claude.cli',
+    };
   }
 
   onChange(cb: (w: BackendChange) => void) {
@@ -229,10 +244,10 @@ export class ClaudeBackend implements AgentBackend {
       const st = JSON.parse(text);
       this.cli = { installed: st.installed === true, version: st.version ?? null, bin_path: st.bin_path ?? null, auth: st.auth ?? null, auth_error: st.auth_error ?? null, error: st.error ?? null };
       const a = this.cli.auth;
-      if (!this.cli.installed) this.setRun('not_installed', 'Claude Code not found. Install it in Settings → Agents → Claude Code.');
+      if (!this.cli.installed) this.setRun('not_installed', 'Claude Code is not installed. Install it from Settings → Claude Code → Account & CLI.');
       else if (!a && this.cli.auth_error) this.setRun('online', `Could not read the sign-in state: ${this.cli.auth_error}`);
       else if (a?.loggedIn) this.setRun('online', [a.email, a.subscriptionType ? `${planLabel(a.subscriptionType)} plan` : null].filter(Boolean).join(' · ') || 'Signed in');
-      else this.setRun('error', 'Sign in required (Settings → Agents → Claude Code)');
+      else this.setRun('error', 'Sign in required (Settings → Claude Code → Account & CLI)');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const offline = /fetch failed|ECONNREFUSED|ENOTFOUND|aborted|timeout/i.test(msg);
@@ -283,7 +298,7 @@ export class ClaudeBackend implements AgentBackend {
 
   async loadProviders() {
     try {
-      const resp = await this.bridgeJson('/api/claude/providers');
+      const resp = await this.bridgeJson('/api/claude/providers', {}, 6_000);
       if (!resp?.success) return;
       this.providers = (Array.isArray(resp.providers) ? resp.providers : []).map((p: any) => ({ ...p, models: Array.isArray(p.models) ? p.models : [] }));
       this.settingsEndpoint = typeof resp.settings_endpoint === 'string' && resp.settings_endpoint.trim() ? resp.settings_endpoint : null;
@@ -297,7 +312,7 @@ export class ClaudeBackend implements AgentBackend {
   /** settings.json: the defaults for new chats (and the settings pages' data). */
   async loadChatDefaults() {
     try {
-      const resp = await this.bridgeJson('/api/claude/settings');
+      const resp = await this.bridgeJson('/api/claude/settings', {}, 6_000);
       if (!resp?.success) return;
       const st = resp.settings && typeof resp.settings === 'object' ? resp.settings : {};
       this.claudeSettings = { path: String(resp.path ?? ''), settings: st };
@@ -845,7 +860,92 @@ export class ClaudeBackend implements AgentBackend {
     const list: Conversation[] = [];
     for (const c of this.convs.values()) list.push(this.withLive(c));
     for (const c of this.localConvs.values()) if (!this.convs.has(c.id)) list.push(this.withLive(c));
+    for (const c of this.subConvs.values()) list.push(c);
     return list;
+  }
+
+  // ------------------------------------------------------------------ subagents (read-only transcripts)
+
+  /** The bridge's subagent runs of chat [sessionId], for its transcript (links, running state). */
+  subagentsOf(sessionId: string) {
+    return (this.subLists.get(sessionId) ?? []).map(toSubagentInfo);
+  }
+
+  hasRunningSubagents(sessionId: string): boolean {
+    return (this.subLists.get(sessionId) ?? []).some((a) => a.running === true);
+  }
+
+  subagentRunning(convId: string): boolean {
+    return this.subConvs.get(convId)?.isRunning === true;
+  }
+
+  /** A fresher subagent list of one chat (its open view polls it). */
+  applySessionSubagents(sessionId: string, list: SubagentWire[]) {
+    const before = JSON.stringify(this.subLists.get(sessionId) ?? []);
+    if (before === JSON.stringify(list)) return;
+    if (list.length) this.subLists.set(sessionId, list);
+    else this.subLists.delete(sessionId);
+    this.rebuildSubConvs();
+    const infos = this.subagentsOf(sessionId);
+    const s = this.sessions.get(sessionId);
+    if (s) {
+      s.transcript.setSubagents(infos);
+      s.scheduleEmit();
+    }
+    for (const v of this.subViews.values()) if (v.sessionId === sessionId) v.update(infos);
+    this.changed('conversations');
+  }
+
+  /** Drawer rows: each subagent under its chat (or under the subagent that started it). */
+  private rebuildSubConvs() {
+    const next = new Map<string, Conversation>();
+    for (const [sessionId, list] of this.subLists) {
+      const parent = this.convs.get(sessionId);
+      if (!parent) continue;
+      for (const w of list) {
+        if (!w?.agent_id) continue;
+        const id = subagentConversationId(sessionId, w.agent_id);
+        const running = w.running === true;
+        next.set(id, {
+          id,
+          title: (w.description || w.agent_type || 'Subagent').trim(),
+          modelId: '',
+          createdAt: num(w.created_at) || parent.createdAt,
+          updatedAt: num(w.updated_at) || parent.updatedAt,
+          isRunning: running,
+          notFullyIdle: running,
+          hasActivity: false,
+          runStatus: running ? 'RUNNING' : 'IDLE',
+          stepCount: 0,
+          workspaceUri: parent.workspaceUri,
+          nestingDepth: w.parent_agent_id ? 2 : 1,
+          agent: 'CLAUDE',
+          archived: parent.archived,
+          parentConversationId: w.parent_agent_id ? subagentConversationId(sessionId, w.parent_agent_id) : sessionId,
+          subagentRole: w.description || null,
+          subagentTypeName: w.agent_type || null,
+        });
+      }
+    }
+    this.subConvs = next;
+  }
+
+  private subView(id: string): ClaudeSubagentView {
+    let v = this.subViews.get(id);
+    if (!v) {
+      const p = parseSubagentId(id)!;
+      v = new ClaudeSubagentView(id, p.sessionId, p.agentId, this);
+      v.update(this.subagentsOf(p.sessionId));
+      this.subViews.set(id, v);
+    }
+    return v;
+  }
+
+  dropSubagentView(id: string) {
+    const v = this.subViews.get(id);
+    if (!v || v.listeners.size) return;
+    v.close();
+    this.subViews.delete(id);
   }
 
   private withLive(c: Conversation): Conversation {
@@ -855,7 +955,7 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   conversation(id: string): Conversation | undefined {
-    return this.convs.get(id) ?? this.localConvs.get(id);
+    return this.convs.get(id) ?? this.localConvs.get(id) ?? this.subConvs.get(id);
   }
 
   /** The bridge lists the chat (its transcript exists); a chat only known here has not been written yet. */
@@ -903,6 +1003,12 @@ export class ClaudeBackend implements AgentBackend {
         });
       }
       this.convs = next;
+      const lists = new Map<string, SubagentWire[]>();
+      for (const s of list) if (typeof s?.id === 'string' && Array.isArray(s.subagents) && s.subagents.length) lists.set(s.id, s.subagents);
+      this.subLists = lists;
+      this.rebuildSubConvs();
+      for (const s of this.sessions.values()) s.transcript.setSubagents(this.subagentsOf(s.id));
+      for (const v of this.subViews.values()) v.update(this.subagentsOf(v.sessionId));
       // a chat started here is now written to disk: the bridge's entry replaces the local one
       for (const id of [...this.localConvs.keys()]) if (next.has(id)) this.localConvs.delete(id);
       const first = !this.sessionsLoaded;
@@ -925,6 +1031,7 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   async conversationAction(id: string, action: 'delete' | 'fork' | 'rename' | 'archive' | 'unarchive', value?: string): Promise<string | void> {
+    if (parseSubagentId(id)) throw new Error('A subagent is part of its parent chat: change the parent chat instead');
     const check = (r: any) => {
       if (!r?.success) throw new Error(r?.error ?? 'the bridge refused');
     };
@@ -987,6 +1094,7 @@ export class ClaudeBackend implements AgentBackend {
     let s = this.sessions.get(id);
     if (!s) {
       s = new ClaudeSession(id, this);
+      s.transcript.setSubagents(this.subagentsOf(id));
       this.sessions.set(id, s);
     }
     return s;
@@ -1000,16 +1108,23 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   subscribe(conversationId: string, listener: (s: ChatState) => void) {
+    if (parseSubagentId(conversationId)) {
+      const v = this.subView(conversationId);
+      v.addListener(listener);
+      return () => v.removeListener(listener);
+    }
     const s = this.session(conversationId);
     s.addListener(listener);
     return () => s.removeListener(listener);
   }
 
   getState(conversationId: string): ChatState {
+    if (parseSubagentId(conversationId)) return this.subView(conversationId).state();
     return this.session(conversationId).state();
   }
 
   async send(req: SendRequest): Promise<void> {
+    if (parseSubagentId(req.conversationId)) throw new Error('A subagent takes instructions from its parent chat only');
     const s = this.session(req.conversationId);
     const known = this.conversation(req.conversationId);
     if (!this.isOnDisk(s.id) && !s.prepared && s.transcript.isEmpty && !s.historyLoaded) s.prepareNewChat(this.takeNewChatControls(req.modelId));
@@ -1158,5 +1273,7 @@ export class ClaudeBackend implements AgentBackend {
     for (const ts of this.titleTimers.values()) for (const t of ts) clearTimeout(t);
     for (const s of this.sessions.values()) s.close();
     this.sessions.clear();
+    for (const v of this.subViews.values()) v.close();
+    this.subViews.clear();
   }
 }

@@ -20,6 +20,12 @@ export interface AgentStatus {
   detail?: string | null;
   /** Logged-in account, when known. */
   account?: string | null;
+  /** CLI version ("1.5.3"), when known. */
+  version?: string | null;
+  /** Subscription / plan ("Google AI Pro", "Max", "Free"), when known. */
+  plan?: string | null;
+  /** Settings page that installs / signs in / fixes this agent ('agy.cli', 'claude.cli'…), for "Install" buttons. */
+  setupPage?: string | null;
 }
 
 export interface WorkspaceFolder {
@@ -108,6 +114,11 @@ export interface ChatPatch {
   notice?: string | null;
   /** The model this chat uses (per-chat model agents such as Claude); the model pill prefers it. */
   modelId?: string | null;
+  /**
+   * The chat cannot take messages (a Claude subagent's transcript: it is driven by its parent chat). The text says why;
+   * the composer is replaced by it (and a link to the parent chat when the conversation has parentConversationId).
+   */
+  readOnly?: string | null;
 }
 
 /** What the user has open / selected in the VS Code editor (the composer offers it as a chip). */
@@ -156,6 +167,8 @@ export interface QuotaWindowView {
   remaining: number;
   /** Time until it resets, already formatted ("2h 20m"). */
   resetText?: string | null;
+  /** Share left, already formatted the agent's way ("48.8%" for Antigravity, "75%" for Claude). Prefer it. */
+  text?: string | null;
 }
 
 /** A section of the model picker (mirrors the app's QuotaGroupHeader). */
@@ -218,7 +231,20 @@ export type SettingItem =
   /** Several of `options` can be ticked (checkboxes); settingChange value = string[] of ticked values. */
   | { kind: 'checklist'; id: string; label: string; description?: string | null; values: string[]; options: SettingOption[]; disabled?: boolean }
   | { kind: 'select'; id: string; label: string; description?: string | null; value: string; options: SettingOption[]; disabled?: boolean }
-  | { kind: 'text'; id: string; label: string; description?: string | null; value: string; placeholder?: string | null; multiline?: boolean; disabled?: boolean }
+  | {
+      kind: 'text';
+      id: string;
+      label: string;
+      description?: string | null;
+      value: string;
+      placeholder?: string | null;
+      multiline?: boolean;
+      disabled?: boolean;
+      /** Visible rows of a multiline field (a settings.json editor wants ~24). */
+      rows?: number | null;
+      /** Monospace code editor look (JSON / config files). */
+      code?: boolean;
+    }
   | { kind: 'info'; id: string; label: string; value: string; tone?: 'ok' | 'warn' | 'error' | 'muted' | null; description?: string | null }
   | {
       kind: 'button';
@@ -246,7 +272,30 @@ export type SettingItem =
   /** Opens a sub-page (the view sends requestSettings {page: id}). */
   | { kind: 'page'; id: string; label: string; description?: string | null; icon?: string | null; badge?: string | null }
   /** Usage meters (account quota). */
-  | { kind: 'quota'; id: string; label: string; groups: ModelGroupView[] };
+  | { kind: 'quota'; id: string; label: string; groups: ModelGroupView[] }
+  /**
+   * The app's MCP preset tiles (Custom Plugin MCP, Plugin Developer, Browser, Notes & To-dos, Jarvis, Theme, Stitch,
+   * Google Flow, Custom server…): a grid of cards; a tap sends settingAction {id: item.id, actionId: tile.id, values?}
+   * after the tile's form (e.g. Stitch API key) when it has one. `added` shows the app's "Added" state.
+   */
+  | {
+      kind: 'presets';
+      id: string;
+      label: string;
+      description?: string | null;
+      tiles: {
+        id: string;
+        name: string;
+        subtitle: string;
+        /** Material icon name (extension, developer_mode, language, edit_note, record_voice_over, palette, add…). */
+        icon: string;
+        /** Accent token or hex ('primary', 'info', 'warning', '#D97757'…). */
+        accent?: string | null;
+        added?: boolean;
+        disabled?: boolean;
+        form?: SettingFormField[] | null;
+      }[];
+    };
 
 export interface SettingsSection {
   id: string;
@@ -264,6 +313,8 @@ export interface SettingsPage {
   sections: SettingsSection[];
   /** The host is loading this page's data (show a spinner on the header). */
   loading?: boolean;
+  /** The page could not be built (agent offline, CLI missing…): show this with a Retry (re-sends requestSettings). */
+  error?: string | null;
 }
 
 /** View preferences shared by every view (sidebar + editor tabs), kept by the host. */
@@ -288,6 +339,174 @@ export interface ProjectView {
   chats?: number | null;
 }
 
+/** A note or to-do list (the Notes screen; same shape notes_mcp stores). */
+export interface NoteView {
+  id: string;
+  kind: 'note' | 'todo';
+  title: string;
+  text: string;
+  items: { id: string; text: string; done: boolean }[];
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ------------------------------------------------------------------------------------------------ Jarvis
+// The command center (port of the app's data/jarvis/* minus voice). Every Jarvis chat is a normal chat of an agent
+// ("manager", keyed by its chat id) that plans, hands tasks to other chats and gets their news back. The host owns
+// the whole state and pushes it as `jarvis` messages; the view only draws it and sends `jarvisAction`s.
+// See docs/JARVIS.md for the exact shapes and which Kotlin UI files to port.
+
+export type JarvisTaskState = 'starting' | 'running' | 'waiting_approval' | 'asking' | 'no_progress' | 'done' | 'failed' | 'stopped';
+
+export interface JarvisStepView {
+  n: number;
+  text: string;
+  status: 'todo' | 'doing' | 'done' | 'blocked';
+  note: string;
+}
+
+export interface JarvisMissionView {
+  goal: string;
+  doneWhen: string;
+  steps: JarvisStepView[];
+  status: 'active' | 'done' | 'paused';
+  autopilot: boolean;
+  notes: string;
+  /** Steps done (the strip's "3/7"). */
+  doneCount: number;
+  updatedAt: number;
+}
+
+export interface JarvisTeamView {
+  name: string;
+  agent: AgentKind;
+  /** Model id ("" = the agent's default). */
+  model: string;
+  role: string;
+  /** Project path ("" = the active project at the time). */
+  project: string;
+  /** Its tasks working right now. */
+  runningTasks: number;
+}
+
+export interface JarvisTaskView {
+  /** The task's chat id (open it like any chat). */
+  id: string;
+  title: string;
+  goal: string;
+  agent: AgentKind;
+  state: JarvisTaskState;
+  /** "waiting for approval", "no progress"… */
+  stateLabel: string;
+  /** Still working (starting, running, waiting for approval, asking, no progress). */
+  active: boolean;
+  /** Waiting for a decision (approval or question): amber. */
+  needsUser: boolean;
+  /** The Jarvis chat (manager) that runs it. */
+  owner: string;
+  team: string;
+  project: string;
+  /** One line about the latest change ("Finished", "Waiting for an approval"). */
+  note: string;
+  createdAt: number;
+  updatedAt: number;
+  followUps: number;
+}
+
+export interface JarvisManagerView {
+  /** The Jarvis chat's id (also its manager_id). */
+  chatId: string;
+  agent: AgentKind;
+  /** The chat's title (from the chat list), when known. */
+  title: string | null;
+  /** null = no mission yet. */
+  mission: JarvisMissionView | null;
+  teams: JarvisTeamView[];
+  /** What it says it is doing right now (jarvis_status, the tool it uses, a task's news); null = nothing. */
+  status: string | null;
+  /** thinking = its turn runs (the model writes), working = its turn runs a tool, idle = waiting for the user / news. */
+  phase: 'thinking' | 'working' | 'idle';
+  /** The last few status lines, newest last (the activity card). */
+  steps: { text: string; at: number; done: boolean }[];
+  /** Its tasks still working. */
+  activeTasks: number;
+  /** One of its tasks waits for a decision. */
+  needsAttention: boolean;
+  /** Its agent answered that it has no jarvis_mcp tools: show "Add the Jarvis MCP server" (Settings → Jarvis → Setup). */
+  toolsMissing: boolean;
+  /** News queued for it (delivered when its turn ends). */
+  pendingEvents: number;
+}
+
+export interface JarvisNoticeView {
+  id: string;
+  text: string;
+  level: 'info' | 'warning' | 'error';
+  /** What tapping it does: 'setup' (Settings → Jarvis → Setup), 'settings' (Settings → Jarvis), 'chat' (open chatId). */
+  action: 'setup' | 'settings' | 'chat' | null;
+  chatId?: string | null;
+  at: number;
+}
+
+export interface JarvisLogEntry {
+  at: number;
+  /** task (started / finished…), event (news delivered), approval, notice, mission, chat */
+  kind: 'task' | 'event' | 'approval' | 'notice' | 'mission' | 'chat';
+  text: string;
+  chatId?: string | null;
+  taskId?: string | null;
+}
+
+export interface JarvisState {
+  /** Settings → Jarvis → Turn on Jarvis. Off: no Jarvis tab, no strip, the MCP answers "Jarvis is turned off". */
+  enabled: boolean;
+  /** Jarvis chats in All / the agent tabs too: none (only under Jarvis), text (the Jarvis chats you opened), all. */
+  listMode: 'none' | 'text' | 'all';
+  /** Agent / model of new Jarvis chats (null = the agent new chats use / its default model). */
+  agent: AgentKind | null;
+  modelId: string | null;
+  /** Every Jarvis chat id (same as conversations with isJarvis). */
+  chatIds: string[];
+  managers: JarvisManagerView[];
+  /** Newest first, at most 30. */
+  tasks: JarvisTaskView[];
+  /** Short-lived notices for the overlay (they expire by themselves; dismissNotice removes one). */
+  notices: JarvisNoticeView[];
+  /** What Jarvis did, newest last (at most 200 here; 500 are kept). */
+  log: JarvisLogEntry[];
+  timers: { id: number; label: string; endsAt: number }[];
+  /** Some task is working. */
+  anyActive: boolean;
+}
+
+/** What a Jarvis button asks for (`jarvisAction`). */
+export type JarvisActionKind =
+  /** Drawer's "New Jarvis chat" (agent: optional): the host answers with `jarvisNewChat`. */
+  | 'newChat'
+  /** taskId */
+  | 'stopTask'
+  | 'openTask'
+  | 'dismissTask'
+  | 'clearFinished'
+  /** chatId (the manager) */
+  | 'pauseMission'
+  | 'resumeMission'
+  | 'clearMission'
+  /** chatId + on */
+  | 'setAutopilot'
+  /** chatId + teamName */
+  | 'removeTeam'
+  /** chatId: stop that Jarvis chat's turn and its tasks; no chatId: every Jarvis chat and task */
+  | 'stopAll'
+  /** noticeId */
+  | 'dismissNotice'
+  | 'clearLog'
+  /** agent: register jarvis_mcp with that agent (Settings → Jarvis → Setup) */
+  | 'setup'
+  /** Open Settings → Jarvis (or settingsPage) in this view */
+  | 'openSettings';
+
 export type HostToView =
   | {
       type: 'init';
@@ -296,6 +515,8 @@ export type HostToView =
       /** Conversation this view opens with (editor panels); null = last / new chat. */
       conversationId: string | null;
       defaultAgent: AgentKind;
+      /** No agents chosen yet: show the app's first-run agent picker (it sends settingChange agents.enabled). */
+      firstRun?: boolean;
     }
   | { type: 'agents'; agents: AgentStatus[] }
   | { type: 'conversations'; conversations: Conversation[] }
@@ -309,6 +530,8 @@ export type HostToView =
   | { type: 'commands'; agent: AgentKind; commands: SlashCommandView[] }
   /** A settings page (answer to requestSettings, and again whenever its values change while open). */
   | { type: 'settings'; page: SettingsPage }
+  /** A settingAction / settingChange finished (buttons show "Working…" until then). */
+  | { type: 'settingDone'; page: string; id: string; rowId?: string | null; actionId?: string | null; ok: boolean; error?: string | null }
   /** Shared view preferences (theme…), on init and whenever they change. */
   | { type: 'uiPrefs'; prefs: UiPrefs }
   /** Answer to requestProjects. */
@@ -324,7 +547,19 @@ export type HostToView =
   /** Answer to searchChats. */
   | { type: 'chatSearchResult'; reqId: string; results: ChatSearchHit[] }
   /** Put the cursor in the composer (keyboard shortcut). */
-  | { type: 'focusComposer' };
+  | { type: 'focusComposer' }
+  /** Every note (answer to requestNotes, and again after any change — also when an agent edits them via notes_mcp). */
+  | { type: 'notes'; notes: NoteView[] }
+  // ---- Jarvis
+  /** Jarvis state: `full` = the whole state (on init / requestJarvis); otherwise only the fields that changed. */
+  | { type: 'jarvis'; state: Partial<JarvisState>; full?: boolean }
+  /**
+   * Answer to jarvisAction newChat: show an empty new chat of `agent` (preselect `modelId` for it when not null) marked
+   * as a Jarvis chat (JarvisChatWelcome + strip); its first `send` carries `jarvis: true`.
+   */
+  | { type: 'jarvisNewChat'; agent: AgentKind; modelId: string | null }
+  /** Jarvis (a tool, a notice) wants this view to show a screen: a chat, the notes, or a settings page. */
+  | { type: 'jarvisNavigate'; screen: 'chat' | 'notes' | 'settings'; conversationId?: string | null; settingsPage?: string | null };
 
 export type ConversationAction = 'delete' | 'fork' | 'rename' | 'archive' | 'unarchive' | 'copyId' | 'openInEditor';
 
@@ -342,6 +577,8 @@ export type ViewToHost =
       attachments: ChatAttachment[];
       modelId: string | null;
       workspaceUri: string | null;
+      /** Jarvis: a new chat opened with "New Jarvis chat" (jarvisNewChat): it becomes a Jarvis chat. */
+      jarvis?: boolean;
     }
   | { type: 'stop'; conversationId: string }
   | { type: 'approval'; conversationId: string; key: string; choiceId?: string; deny?: boolean; feedback?: string }
@@ -390,6 +627,12 @@ export type ViewToHost =
   | { type: 'forgetProject'; path: string }
   /** Optional: an artifact card's download button: save a copy of the file (e.g. a "Save As" dialog). */
   | { type: 'saveArtifact'; path: string }
+  /** Open the Notes screen: the host answers with `notes` and keeps sending them while it is open. */
+  | { type: 'requestNotes' }
+  /** Notes screen edits: create (note fields), update (whole note), delete (id), restore (undo a delete). */
+  | { type: 'notesAction'; action: 'create' | 'update' | 'delete' | 'restore'; note: Partial<NoteView> & { id?: string } }
+  /** Drawer ⏻: stop the bridge and every agent (the app's exit). Reconnect / retryConnections starts them again. */
+  | { type: 'powerOff' }
   /** A controls-strip chip changed (conversationId null = defaults for the next new chat). */
   | { type: 'setControl'; agent: AgentKind; conversationId: string | null; id: string; value: string }
   /** Show a local image (artifact / attachment thumbnail): answered with imageData. */
@@ -409,4 +652,19 @@ export type ViewToHost =
   /** An action on a tool card ("terminate" a running command, …). */
   | { type: 'toolAction'; conversationId: string; toolId: string; action: 'terminate' | string }
   /** Model sheet edit mode: move a model (by its group key) to another quota group (null = automatic). */
-  | { type: 'setQuotaGroup'; agent: AgentKind; modelId: string; group: string | null };
+  | { type: 'setQuotaGroup'; agent: AgentKind; modelId: string; group: string | null }
+  // ---- Jarvis
+  /** Ask for the whole Jarvis state (answered with `jarvis {full: true}`; it is also sent on init). */
+  | { type: 'requestJarvis' }
+  /** A Jarvis button (drawer, command strip, board, panel, overlay). See JarvisActionKind for which fields go with which action. */
+  | {
+      type: 'jarvisAction';
+      action: JarvisActionKind;
+      chatId?: string | null;
+      taskId?: string | null;
+      agent?: AgentKind | null;
+      noticeId?: string | null;
+      teamName?: string | null;
+      on?: boolean | null;
+      settingsPage?: string | null;
+    };

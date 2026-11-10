@@ -106,6 +106,17 @@ interface ToolState {
   exitCode: number | null;
   startedAt: number;
   durationMs: number | null;
+  /** Agent/Task: the subagent's id (links the card to its transcript); background = launched with run_in_background. */
+  agentId?: string | null;
+  background?: boolean;
+}
+
+/** What the bridge knows about a subagent run (from the session list). */
+export interface SubagentInfo {
+  agentId: string;
+  toolUseId: string;
+  running: boolean;
+  finished: boolean;
 }
 
 /** Internal tools that are not interesting to show as cards. */
@@ -145,6 +156,14 @@ export class ClaudeTranscript {
   private afterCompactBoundary = false;
   private lastEventUuid: string | null = null;
   private lastResultCost = 0;
+  /** subagent id → its Agent tool card (from the launch result, a task notification or the bridge's list). */
+  private agentToTool = new Map<string, string>();
+  /** The bridge's subagent list for this chat, by tool use id. */
+  private subagentsByTool = new Map<string, SubagentInfo>();
+  /** Show sidechain entries: this transcript is a subagent's own (every line is `isSidechain: true`). */
+  acceptSidechain = false;
+  /** The session the subagent conversations belong to ("<session>:agent-<id>"); the chat itself by default. */
+  rootSessionId: string | null = null;
 
   reset(convId: string) {
     this.conversationId = convId;
@@ -159,6 +178,8 @@ export class ClaudeTranscript {
     this.afterCompactBoundary = false;
     this.lastEventUuid = null;
     this.lastResultCost = 0;
+    this.agentToTool.clear();
+    for (const [toolId, a] of this.subagentsByTool) this.agentToTool.set(a.agentId, toolId);
     this.sessionModel = null;
     this.permissionMode = null;
     this.cacheInfo = null;
@@ -218,6 +239,40 @@ export class ClaudeTranscript {
       if (t.kind === 'user') return t.uuid;
     }
     return null;
+  }
+
+  /**
+   * The bridge's subagent runs of this chat: links Agent cards to their transcripts and tells which background runs are
+   * still working (a chat loaded from history has no live task events).
+   */
+  setSubagents(list: SubagentInfo[]) {
+    const next = new Map(list.filter((a) => a.toolUseId).map((a) => [a.toolUseId, a]));
+    for (const [toolId, a] of next) {
+      const prev = this.subagentsByTool.get(toolId);
+      this.agentToTool.set(a.agentId, toolId);
+      const tool = this.tools.get(toolId);
+      if (!tool) continue;
+      let changed = !prev || prev.running !== a.running || prev.finished !== a.finished || tool.agentId !== a.agentId;
+      tool.agentId = a.agentId;
+      // a background run that ended while nobody watched the stream
+      if (tool.background && tool.status === 'RUNNING' && !a.running && !this.isTurnActive) {
+        tool.status = a.finished ? 'SUCCESS' : 'TERMINATED';
+        tool.progress = null;
+        changed = true;
+      } else if (tool.background && tool.status === 'TERMINATED' && a.running && !tool.output.trim()) {
+        // ended at load time for lack of news, but it still works (another process runs it)
+        tool.status = 'RUNNING';
+        tool.progress = 'Running in the background';
+        changed = true;
+      }
+      if (changed) this.touch(tool.turn);
+    }
+    this.subagentsByTool = next;
+  }
+
+  /** The conversation id of a subagent run of this chat. */
+  subagentConversationId(agentId: string): string {
+    return `${this.rootSessionId ?? this.conversationId}:agent-${agentId}`;
   }
 
   // ------------------------------------------------------------------ local actions
@@ -338,16 +393,19 @@ export class ClaudeTranscript {
       }
     }
     for (const tool of this.tools.values()) {
-      if (OPEN_STATUSES.has(tool.status)) {
-        tool.status = 'TERMINATED';
-        this.touch(tool.turn);
-      }
+      if (!OPEN_STATUSES.has(tool.status)) continue;
+      const sub = this.subagentsByTool.get(tool.id);
+      // a background subagent keeps working after its turn (another process may still run it)
+      if (tool.background && sub?.running) continue;
+      tool.status = tool.background && sub?.finished ? 'SUCCESS' : 'TERMINATED';
+      tool.progress = null;
+      this.touch(tool.turn);
     }
     this.activeTurn = null;
   }
 
   private onStreamEvent(e: any) {
-    if (e.parent_tool_use_id != null) return;
+    if (e.parent_tool_use_id != null && !this.acceptSidechain) return;
     const ev = obj(e.event);
     if (!ev) return;
     switch (ev.type) {
@@ -407,7 +465,7 @@ export class ClaudeTranscript {
   }
 
   private onAssistant(e: any) {
-    if (e.parent_tool_use_id != null || e.isSidechain === true) return;
+    if (!this.acceptSidechain && (e.parent_tool_use_id != null || e.isSidechain === true)) return;
     const uuid = typeof e.uuid === 'string' ? e.uuid : null;
     // events re-emitted after /compact carry the uuids we already showed
     if (uuid) {
@@ -481,7 +539,7 @@ export class ClaudeTranscript {
   }
 
   private onUser(e: any, live: boolean) {
-    if (e.parent_tool_use_id != null || e.isSidechain === true) return;
+    if (!this.acceptSidechain && (e.parent_tool_use_id != null || e.isSidechain === true)) return;
     const uuid = typeof e.uuid === 'string' ? e.uuid : null;
     if (uuid && this.seenUuids.has(uuid)) return;
     if (uuid) this.seenUuids.add(uuid);
@@ -491,7 +549,36 @@ export class ClaudeTranscript {
     if (e.isCompactSummary === true || (e.isSynthetic === true && this.afterCompactBoundary)) {
       this.afterCompactBoundary = false;
       const text = contentText(content).trim();
-      if (text) this.turns.push({ kind: 'summary', id: `summary_${uuid ?? this.turns.length}`, text, createdAt: Date.now(), version: 0, cached: null, cachedVersion: -1 });
+      if (text) {
+        // the card sits where the compaction happened: the reply so far ends above it, and whatever Claude writes
+        // next (an auto-compaction continues the same turn) starts a new message below it
+        const running = this.activeTurn;
+        const wasStreaming = running?.isStreaming === true;
+        if (running) {
+          running.isStreaming = false;
+          if (!running.parts.length) this.turns.splice(this.turns.indexOf(running), 1);
+          else this.touch(running);
+          this.activeTurn = null;
+        }
+        const at = parseTime(e.timestamp) ?? Date.now();
+        this.turns.push({ kind: 'summary', id: `summary_${uuid ?? this.turns.length}`, text, createdAt: at, version: 0, cached: null, cachedVersion: -1 });
+        if (live && wasStreaming) this.beginAssistantTurn();
+      }
+      if (uuid) this.lastEventUuid = uuid;
+      return;
+    }
+    const origin = obj(e.origin);
+    // a subagent's final report (SubagentHandback) goes on its Agent card
+    if (origin?.kind === 'peer') {
+      if (origin.handback === true) this.onHandback(origin, contentText(content));
+      if (uuid) this.lastEventUuid = uuid;
+      return;
+    }
+    // a background task ended (a subagent, a background command): its card is updated; Claude's reaction to it
+    // follows in a new message, opened by a short note (the notification itself is not the user's message)
+    const rawText = contentText(content).trimStart();
+    if (origin?.kind === 'task-notification' || rawText.startsWith('<task-notification>')) {
+      this.onTaskNotificationMessage(rawText, live, parseTime(e.timestamp));
       if (uuid) this.lastEventUuid = uuid;
       return;
     }
@@ -600,7 +687,10 @@ export class ClaudeTranscript {
       case 'task_started': {
         const toolId = str(s.tool_use_id);
         if (!toolId) return;
-        if (typeof s.task_id === 'string') this.taskToTool.set(s.task_id, toolId);
+        if (typeof s.task_id === 'string') {
+          this.taskToTool.set(s.task_id, toolId);
+          if (!this.agentToTool.has(s.task_id)) this.agentToTool.set(s.task_id, toolId);
+        }
         const t = this.tools.get(toolId);
         if (t) {
           t.progress = `Running: ${str(s.description)}`.replace(/[:\s]+$/, '');
@@ -614,7 +704,8 @@ export class ClaudeTranscript {
         const t = this.tools.get(toolId);
         if (t) {
           const status = str(s.status);
-          t.progress = [status ? status.charAt(0).toUpperCase() + status.slice(1) : null, typeof s.summary === 'string' ? s.summary : null].filter(Boolean).join(': ');
+          if (t.background) this.finishBackgroundTool(t, status.toLowerCase(), str(s.summary));
+          else t.progress = [status ? status.charAt(0).toUpperCase() + status.slice(1) : null, typeof s.summary === 'string' ? s.summary : null].filter(Boolean).join(': ');
           this.touch(t.turn);
         }
         break;
@@ -724,6 +815,25 @@ export class ClaudeTranscript {
     if (!tool) return;
     const text = contentText(r.content);
     const isError = r.is_error === true;
+    if (tool.name === 'Agent' || tool.name === 'Task') {
+      const st = obj(structured);
+      const agentId = str(st?.agentId) || /\bagentId:\s*([\w-]+)/.exec(text)?.[1] || this.subagentsByTool.get(id)?.agentId || '';
+      if (agentId) {
+        tool.agentId = agentId;
+        this.agentToTool.set(agentId, id);
+      }
+      // run_in_background: the result only says it started; the report comes later (hand-back / task notification)
+      if (!isError && (st?.isAsync === true || st?.status === 'async_launched' || text.startsWith('Async agent launched'))) {
+        tool.background = true;
+        tool.status = 'RUNNING';
+        tool.progress = 'Running in the background';
+        tool.output = '';
+        tool.exitCode = null;
+        this.pending.delete(id);
+        this.touch(tool.turn);
+        return;
+      }
+    }
     tool.output = toolOutput(tool, text, structured);
     tool.progress = null;
     tool.status = !isError ? 'SUCCESS' : /rejected|denied|doesn't want to proceed/i.test(text) ? 'REJECTED' : 'FAILED';
@@ -742,6 +852,71 @@ export class ClaudeTranscript {
     }
     turn.parts.push({ kind: 'text', text: `_${text}_` });
     this.touch(turn);
+  }
+
+  /** A subagent handed back its final report: it becomes the output of its Agent card. */
+  private onHandback(origin: Record<string, any>, content: string) {
+    const agentId = str(origin.from) || str(origin.senderTaskId);
+    const toolId = agentId ? this.agentToTool.get(agentId) : undefined;
+    const tool = toolId ? this.tools.get(toolId) : undefined;
+    if (!tool) return;
+    let report = typeof origin.handbackReportText === 'string' ? origin.handbackReportText : '';
+    if (!report) {
+      // older CLIs: the report is indented by two spaces after "The report follows:"
+      const i = content.indexOf('The report follows:');
+      if (i >= 0) report = content.slice(i + 'The report follows:'.length).replace(/<\/agent-message>\s*$/, '').split('\n').map((l) => l.replace(/^ {2}/, '')).join('\n');
+    }
+    // the CLI's safety banner is for the parent model, not for people
+    report = report.replace(/^\s*\[harness:[^\n]*\]\s*/, '').trim();
+    if (!report) return;
+    tool.output = report;
+    tool.progress = null;
+    if (tool.status === 'RUNNING') tool.status = 'SUCCESS';
+    this.touch(tool.turn);
+  }
+
+  /** `<task-notification>` (a background subagent or command ended), as transcripts and replays carry it. */
+  private onTaskNotificationMessage(text: string, live: boolean, at: number | null) {
+    const tag = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim() ?? '';
+    const taskId = tag('task-id');
+    const toolId = tag('tool-use-id') || this.taskToTool.get(taskId) || this.agentToTool.get(taskId) || '';
+    const status = tag('status').toLowerCase();
+    const summary = tag('summary');
+    const tool = toolId ? this.tools.get(toolId) : undefined;
+    if (tool) {
+      this.finishBackgroundTool(tool, status, summary);
+      const result = tag('result');
+      // the report usually came as a hand-back already ("…delivered to you as a message…")
+      if (result && !tool.output.trim() && !/^This agent's report was delivered/.test(result)) tool.output = result;
+      const ms = Number(tag('duration_ms'));
+      if (Number.isFinite(ms) && ms > 0) tool.durationMs = ms;
+      this.touch(tool.turn);
+    }
+    if (live && this.activeTurn) {
+      this.activeTurn.isStreaming = false;
+      this.touch(this.activeTurn);
+    }
+    const turn = this.beginAssistantTurn();
+    if (at != null) {
+      turn.createdAt = at;
+      turn.timed = true;
+    }
+    const label = summary || (status ? `Background task ${status}` : 'Background task finished');
+    turn.parts.push({ kind: 'text', text: `_${label.replace(/[_*]/g, (c) => `\\${c}`)}_` });
+    if (!live) turn.isStreaming = false;
+    this.touch(turn);
+  }
+
+  /** A background tool's end state from a task notification ("completed", "failed", "killed"…). */
+  private finishBackgroundTool(tool: ToolState, status: string, summary: string) {
+    if (!status) return;
+    if (status === 'completed') tool.status = 'SUCCESS';
+    else if (status === 'failed' || status === 'error') tool.status = 'FAILED';
+    else if (/kill|stop|cancel|abort/.test(status)) tool.status = 'TERMINATED';
+    else return;
+    tool.progress = null;
+    if (!tool.output.trim() && summary && tool.status !== 'SUCCESS') tool.output = summary;
+    tool.exitCode = tool.status === 'SUCCESS' ? 0 : 1;
   }
 
   private addLocalCommandOutput(raw: string) {
@@ -824,7 +999,8 @@ export class ClaudeTranscript {
         const tool = this.tools.get(part.toolUseId);
         if (!tool || HIDDEN_TOOLS.has(tool.name)) continue;
         if (!toolCalls.some((c) => c.id === tool.id)) {
-          toolCalls.push(toToolCall(tool));
+          const agentId = tool.agentId ?? this.subagentsByTool.get(tool.id)?.agentId ?? null;
+          toolCalls.push({ ...toToolCall(tool), subagentConversationId: agentId ? this.subagentConversationId(agentId) : null });
           contentParts.push(`<!-- tool_call:${tool.id} -->`);
         }
       } else {

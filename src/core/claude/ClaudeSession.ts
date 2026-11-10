@@ -105,6 +105,13 @@ export class ClaudeSession {
   private wasActive = false;
   private closed = false;
 
+  // ---- a chat another process writes (Claude Code in VS Code, a terminal): the bridge does not stream it
+  /** "<mtime>:<size>" of the transcript the shown history was read from. */
+  private diskStamp: string | null = null;
+  private lastDiskChange = 0;
+  private diskTimer: NodeJS.Timeout | null = null;
+  private diskLoading = false;
+
   constructor(
     readonly id: string,
     private b: ClaudeBackend,
@@ -125,6 +132,7 @@ export class ClaudeSession {
     this.disposeTimer = null;
     this.listeners.add(l);
     if (!this.started) this.begin();
+    this.watchDisk();
     // the prompt-cache chip counts down
     if (!this.tickTimer) this.tickTimer = setInterval(() => this.transcript.cacheInfo && this.scheduleEmit(), 30_000);
     l(this.state());
@@ -259,6 +267,7 @@ export class ClaudeSession {
     if (gen !== this.loadGen || this.closed) return;
     this.error = null;
     this.historyLoaded = true;
+    this.diskStamp = stampOf(h);
     this.transcript.reset(this.id);
     for (const entry of Array.isArray(h.entries) ? h.entries : []) this.transcript.applyHistory(entry);
     this.transcript.finishHistory();
@@ -282,6 +291,63 @@ export class ClaudeSession {
       this.finishReplay();
     }
     this.connect(st.buffer_start_seq);
+  }
+
+  /**
+   * While a view shows the chat: polls the transcript's size / time and subagents (cheap, no history read) and
+   * reloads the history when another process wrote the chat; every 3 s while it changes or a subagent works, else 15 s.
+   */
+  private watchDisk() {
+    if (this.diskTimer || this.closed || !this.listeners.size) return;
+    const busy = Date.now() - this.lastDiskChange < 5 * 60_000 || this.b.hasRunningSubagents(this.id);
+    this.diskTimer = setTimeout(() => void this.checkDisk(), busy && !this.processLive ? 3_000 : 15_000);
+  }
+
+  private async checkDisk() {
+    this.diskTimer = null;
+    if (this.closed || !this.listeners.size) return;
+    try {
+      if (this.historyLoaded && this.b.isOnDisk(this.id)) {
+        const r = await this.b.bridgeJson(`/api/claude/sessions/${this.id}/subagents`, {}, 15_000);
+        if (r?.success && !this.closed) {
+          this.b.applySessionSubagents(this.id, Array.isArray(r.subagents) ? r.subagents : []);
+          const stamp = stampOf(r);
+          if (stamp && stamp !== this.diskStamp) {
+            this.lastDiskChange = Date.now();
+            // the bridge's own process streams its output; only another process' writes need a reload
+            if (!this.processLive && !this.wantsOwnTurn()) await this.reloadFromDisk();
+            else this.diskStamp = stamp;
+          }
+        }
+      }
+    } catch {
+      // the bridge is down: the backend shows that
+    }
+    this.watchDisk();
+  }
+
+  /** A prompt of ours is on its way: its process will stream the turn (no reload under it). */
+  private wantsOwnTurn(): boolean {
+    return this.transcript.isTurnActive || this.awaitingProcess || this.outbox.length > 0 || this.queued.size > 0;
+  }
+
+  /** Shows the transcript as another process left it (the same history read as opening the chat). */
+  private async reloadFromDisk() {
+    if (this.diskLoading || this.isLoading) return;
+    this.diskLoading = true;
+    try {
+      const h = await this.b.bridgeJson(`/api/claude/sessions/${this.id}/history`, {}, 60_000);
+      if (!h?.success || this.closed || this.processLive || this.wantsOwnTurn()) return;
+      // the bridge runs it now: its stream has the rest
+      if (sessionState(h.state).live) return;
+      this.diskStamp = stampOf(h);
+      this.transcript.reset(this.id);
+      for (const entry of Array.isArray(h.entries) ? h.entries : []) this.transcript.applyHistory(entry);
+      this.transcript.finishHistory();
+      this.emitNow();
+    } finally {
+      this.diskLoading = false;
+    }
   }
 
   private finishReplay() {
@@ -966,6 +1032,8 @@ export class ClaudeSession {
   // ------------------------------------------------------------------ teardown
 
   close() {
+    if (this.diskTimer) clearTimeout(this.diskTimer);
+    this.diskTimer = null;
     this.closed = true;
     this.closeSocket();
     this.outbox = [];
@@ -1018,4 +1086,9 @@ function buildBlocks(text: string, atts: ChatAttachment[]): { blocks: any[]; ful
   const blocks: any[] = [...images];
   if (fullText.trim() || !blocks.length) blocks.push({ type: 'text', text: fullText.trim() ? fullText : ' ' });
   return { blocks, fullText, images: imageAtts };
+}
+
+/** "<mtime>:<size>" of a transcript, from a bridge reply (history / subagents), or null. */
+function stampOf(r: any): string | null {
+  return typeof r?.updated_at === 'number' && typeof r?.size_bytes === 'number' && r.updated_at > 0 ? `${r.updated_at}:${r.size_bytes}` : null;
 }

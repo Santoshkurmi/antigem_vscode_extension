@@ -4,7 +4,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { AiModel } from '../../../shared/model';
 import type { ModelGroupView, QuotaWindowView } from '../../../shared/protocol';
-import { countdownText, quotaPercentText } from '../agy/quota';
+import { countdownText } from '../agy/quota';
+import { remainingText } from '../agy/settingsKit';
 import { num, type UnifiedWindow } from './protocol';
 
 export const ALL = 'all';
@@ -100,7 +101,8 @@ export function autoGroup(value: string, displayName: string | null, groups: Cla
 }
 
 function windowView(w: ClaudeQuotaWindow): QuotaWindowView {
-  return { label: w.label, remaining: w.remaining, resetText: countdownText(w.resetAt) };
+  // share left in whole percents ("75%"): Claude reports whole percents (the app's oneDecimal = false)
+  return { label: w.label, remaining: w.remaining, resetText: countdownText(w.resetAt), text: remainingText(w.remaining, false) };
 }
 
 export function groupViews(groups: ClaudeQuotaGroup[]): ModelGroupView[] {
@@ -119,7 +121,7 @@ export function applyClaudeQuota(models: AiModel[], groups: ClaudeQuotaGroup[], 
       ...m,
       group: g.title,
       quotaRemaining: win?.remaining ?? null,
-      quotaText: win ? `${weekly ? '7d ' : ''}${quotaPercentText(win.remaining)}` : null,
+      quotaText: win ? `${weekly ? '7d ' : ''}${remainingText(win.remaining, false)}` : null,
     };
   });
 }

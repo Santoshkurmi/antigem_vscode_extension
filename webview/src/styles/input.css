@@ -516,3 +516,49 @@
 .send-btn.bg {
   background: var(--warning);
 }
+/* the chips row scrolls like the app's (no visible scrollbar) */
+.composer-atts {
+  scrollbar-width: none;
+}
+.composer-atts::-webkit-scrollbar {
+  display: none;
+}
+
+/* a read-only chat (a Claude subagent's): the composer's place */
+.readonly-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+.readonly-icon {
+  flex-shrink: 0;
+  color: var(--on-surface-variant);
+}
+.readonly-text {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(12.5 * var(--sp));
+  line-height: calc(17 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface) 70%, transparent);
+}
+.readonly-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  color: var(--primary);
+  font: inherit;
+  font-size: calc(12 * var(--sp));
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
