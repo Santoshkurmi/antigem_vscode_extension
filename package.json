@@ -3,7 +3,7 @@
   "displayName": "AntiGem VSCode Extension",
   "description": "One chat UI for Antigravity (agy), Claude Code, Codex and OpenCode \u2014 the AntiGem app (VS Code port of the AntiGem Android app: https://github.com/santoshkurmi/antigem), inside VS Code.",
   "publisher": "santoshkurmi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "GPL-3.0",
   "private": true,
   "engines": {
