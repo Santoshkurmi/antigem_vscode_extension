@@ -3,6 +3,22 @@
 The AntiGem app's chat UI inside VS Code: one sidebar and chat tabs for Antigravity (agy), Claude Code, Codex and
 OpenCode, all four through the same bridge and the same UI.
 
+## Why this extension / objective
+
+The goal is to give developers a **single, seamless place inside VS Code** to talk to every coding agent they use
+(Antigravity/agy, Claude Code, Codex, OpenCode) instead of juggling four separate CLIs and UIs. Concretely:
+
+- **One chat UI for all models** — switch agents per conversation without leaving the editor.
+- **Rich GUI and formatting** — markdown, code blocks, diffs, math, diagrams, file chips and image paste, instead
+  of plain terminal text.
+- **Editor integration** — selections and files become chips, `@` mentions, drag & drop, open-in-editor tabs,
+  run shell blocks in a terminal, reveal ranges.
+- **More control** — per-agent settings, CLI paths, project folders, approvals, rewind, plugins/skills, quota
+  views, and a shared bridge so all windows reuse one process.
+
+This is the VS Code port of the AntiGem Android app (https://github.com/santoshkurmi/antigem): same bridge
+protocol, chat UI and agent backends, just hosted inside VS Code instead of on a phone.
+
 ## VS Code integration
 
 | What | How |
@@ -80,4 +96,12 @@ npm run package:all              # all 64-bit targets
 ```
 
 Source code (`bridge/`, `src/`, `shared/`, `webview/src/`) is shipped inside every VSIX for transparency and
-reviewer verification. The GitHub repository is https://github.com/santoshkurmi/antigem_vscode_extension.
+reviewer verification.
+
+## Related projects
+
+- This extension is the VS Code port of the **AntiGem Android app**: https://github.com/santoshkurmi/antigem
+- Extension repository: https://github.com/santoshkurmi/antigem_vscode_extension
+
+Both share the same bridge protocol, chat UI and agent backends (agy, Claude Code, Codex, OpenCode); this project
+just hosts them inside VS Code instead of on a phone.

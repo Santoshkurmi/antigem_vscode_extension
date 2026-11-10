@@ -109,6 +109,14 @@ Caveats:
 - Recommended only for local/personal builds, not for Marketplace publishing. Shipped binaries in this repo's
   releases are **not** UPX-compressed.
 
+## Related projects
+
+- This extension is the VS Code port of the **AntiGem Android app**: https://github.com/santoshkurmi/antigem
+- Extension repository: https://github.com/santoshkurmi/antigem_vscode_extension
+
+Both share the same Go bridge protocol, chat UI and agent backends (agy, Claude Code, Codex, OpenCode); this project
+just hosts them inside VS Code instead of on a phone.
+
 ## Security notes for reviewers
 
 - The bridge listens on `127.0.0.1` only (configurable port, default 1244).
