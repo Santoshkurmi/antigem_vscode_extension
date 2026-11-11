@@ -20,12 +20,13 @@ import {
   state,
   stop,
 } from '../state/store';
-import { ComposerChip, selectionLabel } from './Attachments';
+import { ComposerChip, RangeName, selectionLabel } from './Attachments';
 import { Collapse, Dialog, Icon, type IconName } from '../ui/primitives';
 import { isRunning } from './Feed';
 import { alpha } from '../util/format';
 import { quotaPillWindow } from '../theme';
 import { openAgentSettings, openSettings, setThemePanelOpen } from '../state/settings';
+import { expandMentions, mentionLabel, mentionToken, shortenMentions, shortMentionText, splitPicked, type Mention } from '../util/mentions';
 
 export const [modelSheetOpen, setModelSheetOpen] = createSignal(false);
 /** The composer's model pill: the model picker opens above it. */
@@ -39,6 +40,8 @@ type Popup =
 const [popup, setPopup] = createSignal<Popup | null>(null);
 
 const drafts = new Map<string, string>();
+/** The `@` files picked in each chat's draft (the box shows `@client.js`, the message carries the path). */
+const mentionDrafts = new Map<string, Mention[]>();
 
 // ------------------------------------------------------------------------------------------------ composer chips
 
@@ -182,25 +185,34 @@ function quotaColor(left: number) {
 
 export function InputBar() {
   let ta!: HTMLTextAreaElement;
+  let mirror: HTMLDivElement | undefined;
   const [text, setText] = createSignal('');
+  const [mentions, setMentions] = createSignal<Mention[]>([]);
   const [confirmStop, setConfirmStop] = createSignal(false);
   const draftKey = () => state.chat.conversationId ?? `new:${state.chat.agent}`;
 
-  // drafts per chat
+  // drafts per chat (with the files their `@` names stand for)
   createEffect(
     on(draftKey, (key, prev) => {
-      if (prev !== undefined) drafts.set(prev, text());
+      if (prev !== undefined) {
+        drafts.set(prev, text());
+        mentionDrafts.set(prev, mentions());
+      }
       setText(drafts.get(key) ?? '');
+      setMentions(mentionDrafts.get(key) ?? []);
       queueMicrotask(autosize);
     }),
   );
-  // text pushed by the host (insertText, rewind)
+  // text pushed by the host (insertText, rewind): its `@path`s shown short like picked ones
   createEffect(
     on(composerInsert, (ins) => {
       if (!ins) return;
       setComposerInsert(null);
       const cur = text();
-      setText(ins.replace || !cur ? ins.text : cur + (cur.endsWith(' ') || cur.endsWith('\n') ? '' : ' ') + ins.text);
+      const keep = ins.replace || !cur ? [] : mentions();
+      const short = shortenMentions(ins.text, keep);
+      setMentions(short.mentions);
+      setText(ins.replace || !cur ? short.text : cur + (cur.endsWith(' ') || cur.endsWith('\n') ? '' : ' ') + short.text);
       queueMicrotask(() => {
         autosize();
         ta.focus();
@@ -257,10 +269,33 @@ export function InputBar() {
     if (!ta) return;
     ta.style.height = 'auto';
     ta.style.height = `${ta.scrollHeight}px`;
+    syncMirror();
+  };
+
+  // ---- the highlight layer behind the box: picked `@name`s marked, their path as the box's tooltip on hover
+  const mirrorParts = createMemo(() => (mentions().length ? splitPicked(text(), mentions()) : null));
+  const syncMirror = () => {
+    if (!mirror || !ta) return;
+    // the box's text width (without its scrollbar), so both wrap the same
+    mirror.style.width = `${ta.clientWidth}px`;
+    mirror.style.height = `${ta.clientHeight}px`;
+    mirror.scrollTop = ta.scrollTop;
+  };
+  createEffect(on(mirrorParts, () => queueMicrotask(syncMirror)));
+  const mentionAt = (x: number, y: number) => {
+    if (!mirror) return null;
+    for (const s of Array.from(mirror.querySelectorAll<HTMLElement>('.composer-mention')))
+      for (const r of Array.from(s.getClientRects())) if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return s.dataset.rel ?? null;
+    return null;
+  };
+  const onHover = (e: MouseEvent) => {
+    const rel = mentionAt(e.clientX, e.clientY);
+    const tip = rel ?? '';
+    if (ta.title !== tip) ta.title = tip;
   };
 
   const doSend = () => {
-    const t = text().trim();
+    const t = expandMentions(text(), mentions()).trim();
     const sel = selectionAttachment();
     const atts = sel ? [sel, ...attachments().filter((a) => !sameAtt(a, sel))] : attachments();
     if (!t && !atts.length) return;
@@ -273,13 +308,17 @@ export function InputBar() {
     const key = draftKey();
     batch(() => {
       setText('');
+      setMentions([]);
       setAttachments([]);
       setPopup(null);
     });
     drafts.delete(key);
+    mentionDrafts.delete(key);
     sendMessage(t, atts);
     drafts.delete(key);
     drafts.delete(draftKey());
+    mentionDrafts.delete(key);
+    mentionDrafts.delete(draftKey());
     queueMicrotask(autosize);
   };
 
@@ -386,12 +425,16 @@ export function InputBar() {
             query,
             index: 0,
             pick: (f) => {
-              // the typed "@query" becomes "@path" in the text (no chip): the user can say what each file is for
-              // right where it is named ("@a.ts has the parser, @b.ts calls it")
+              // the typed "@query" becomes "@name" in the text (no chip): the user can say what each file is for
+              // right where it is named ("@a.ts has the parser, @b.ts calls it"); the message carries its path
               const rel = (f.relativePath || f.path).replace(/\/+$/, '') + (f.kind === 'folder' ? '/' : '');
-              const token = `@${/\s/.test(rel) ? `"${rel}"` : rel} `;
               const head = text().substring(0, atIndex);
               const tail = text().substring(ta.selectionStart ?? text().length).replace(/^ /, '');
+              // names the user deleted from the text no longer count when telling same-named files apart
+              const kept = mentions().filter((m) => splitPicked(head + tail, [m]).some((p) => p.rel));
+              const label = mentionLabel(rel, kept);
+              const token = `${mentionToken(label)} `;
+              setMentions(kept.some((m) => m.rel === rel) ? kept : [...kept, { label, rel }]);
               setText(head + token + tail);
               setPopup(null);
               queueMicrotask(() => {
@@ -485,6 +528,15 @@ export function InputBar() {
       <QueuedCard />
       <div class="composer">
         <div class="composer-inner">
+          <div class="composer-text-wrap">
+          <Show when={mirrorParts()}>
+            {(parts) => (
+              <div ref={mirror} class="composer-mirror" aria-hidden="true">
+                <For each={parts()}>{(p) => (p.rel ? <span class="composer-mention" data-rel={p.rel}>{p.t}</span> : p.t)}</For>
+                {'​'}
+              </div>
+            )}
+          </Show>
           <textarea
             ref={ta}
             class="composer-text"
@@ -498,9 +550,13 @@ export function InputBar() {
             }}
             onKeyDown={onKeyDown}
             onClick={updateTriggers}
+            onScroll={syncMirror}
+            onMouseMove={onHover}
+            onMouseLeave={() => (ta.title = '')}
             onBlur={() => setTimeout(() => setPopup(null), 150)}
             onPaste={onPaste}
           />
+          </div>
           <Show when={attachments().length || editorContext()}>
             <div class="composer-atts">
               <EditorOffer />
@@ -645,7 +701,7 @@ function EditorOffer() {
       <Show
         when={ctx()!.selection}
         fallback={
-          <button class="offer-chip off" title={`${ctx()!.relativePath} · click to lock the current file into this message`} onClick={() => addComposerAttachments([fileChip(ctx()!.path)])}>
+          <button class="offer-chip off" title={`${ctx()!.relativePath} · click to add the current file`} onClick={() => addComposerAttachments([fileChip(ctx()!.path)])}>
             <span class="offer-name">{ctx()!.name}</span>
             <Icon name="add" size={14} class="offer-add" />
           </button>
@@ -655,20 +711,20 @@ function EditorOffer() {
           <Show
             when={selectionIncluded()}
             fallback={
-              <button class="offer-chip off" title="Not included · click to lock the selection into this message" onClick={lockSelection}>
-                <span class="offer-name">{selectionLabel(ctx()!.name, sel().startLine, sel().endLine)}</span>
-                <Icon name="lock" size={13} class="offer-add" />
+              <button class="offer-chip off" title="Not included · click to add the selection" onClick={lockSelection}>
+                <RangeName name={ctx()!.name} start={sel().startLine} end={sel().endLine} class="offer-name" />
+                <Icon name="add" size={14} class="offer-add" />
               </button>
             }
           >
             <div class="offer-chip on">
               <button
                 class="offer-main"
-                title={`${ctx()!.relativePath} · included with your message while selected · click to lock it, then select more lines or files`}
+                title={`${ctx()!.relativePath} · included with your message while selected · click to add it, then select more lines or files`}
                 onClick={lockSelection}
               >
-                <span class="offer-name">{selectionLabel(ctx()!.name, sel().startLine, sel().endLine)}</span>
-                <Icon name="lock" size={13} class="offer-add" />
+                <RangeName name={ctx()!.name} start={sel().startLine} end={sel().endLine} class="offer-name" />
+                <Icon name="add" size={14} class="offer-add" />
               </button>
               <button class="att-remove" title="Don't include the selection" onClick={() => setExcludedKey(offerKey())}>
                 <Icon name="close_o" size={13} />
@@ -706,7 +762,7 @@ function QueuedCard() {
           {(q) => (
             <div class="queued-row">
               <span class="queued-text" classList={{ muted: !q.text.trim() }}>
-                {q.text.trim().replace(/\s+/g, ' ') || (q.attachmentCount === 1 ? '1 attachment' : `${q.attachmentCount} attachments`)}
+                {shortMentionText(q.text.trim()).replace(/\s+/g, ' ') ||(q.attachmentCount === 1 ? '1 attachment' : `${q.attachmentCount} attachments`)}
               </span>
               <Show when={q.isPending}>
                 <span class="mini-spinner" />

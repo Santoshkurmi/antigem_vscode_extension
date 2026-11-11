@@ -4,7 +4,6 @@ import { createResource, Show } from 'solid-js';
 import type { ChatAttachment } from '@shared/model';
 import { readImage, send } from '../state/store';
 import { Icon, type IconName } from '../ui/primitives';
-import { formatSize } from '../util/format';
 import { openImageViewer } from './Media';
 
 export type AttKind = 'image' | 'selection' | 'folder' | 'file' | 'audio';
@@ -45,6 +44,18 @@ export function selectionLabel(name: string, start?: number | null, end?: number
   return end && end !== start ? `${name}:${start}-${end}` : `${name}:${start}`;
 }
 
+/** "file.ts" + ":12-30": a long name shortens with "…", the line numbers always show. */
+export function RangeName(props: { name: string; start?: number | null; end?: number | null; class: string }) {
+  return (
+    <span class="range-name">
+      <span class={props.class}>{props.name}</span>
+      <Show when={props.start}>
+        <span class={`${props.class} range-lines`}>{selectionLabel('', props.start, props.end)}</span>
+      </Show>
+    </span>
+  );
+}
+
 export function openAttachment(a: ChatAttachment, src?: string | null) {
   const k = attKind(a);
   const path = pathOf(a);
@@ -63,13 +74,8 @@ const ICONS: Record<AttKind, IconName> = { image: 'image', selection: 'code', fo
 export function ComposerChip(props: { att: ChatAttachment; onRemove: () => void }) {
   const kind = () => attKind(props.att);
   const src = useImageSrc(() => props.att);
-  const sub = () => {
-    const a = props.att;
-    // a range chip's name already says its lines (app.js:12-30)
-    if (kind() === 'selection') return null;
-    if (kind() === 'folder') return 'Folder';
-    return a.reference && a.size > 0 ? formatSize(a.size) : null;
-  };
+  // no size line (it said nothing useful); a range chip's name already says its lines (app.js:12-30)
+  const sub = () => (kind() === 'folder' ? 'Folder' : null);
   return (
     <div class="att-chip" classList={{ [`k-${kind()}`]: true }}>
       <button class="att-main" title={pathOf(props.att) || props.att.name} onClick={() => openAttachment(props.att, src())}>
@@ -77,7 +83,9 @@ export function ComposerChip(props: { att: ChatAttachment; onRemove: () => void 
           <img class="att-thumb" src={src()!} alt={props.att.name} />
         </Show>
         <span class="att-text">
-          <span class="att-name">{kind() === 'selection' ? selectionLabel(props.att.name.replace(/:\d+(-\d+)?$/, ''), props.att.lineStart, props.att.lineEnd) : props.att.name}</span>
+          <Show when={kind() === 'selection'} fallback={<span class="att-name">{props.att.name}</span>}>
+            <RangeName name={props.att.name.replace(/:\d+(-\d+)?$/, '')} start={props.att.lineStart} end={props.att.lineEnd} class="att-name" />
+          </Show>
           <Show when={sub()}>
             <span class="att-sub">{sub()}</span>
           </Show>
@@ -90,7 +98,10 @@ export function ComposerChip(props: { att: ChatAttachment; onRemove: () => void 
   );
 }
 
-/** A selection sent with a prompt, shown back in the user's bubble: the code range; a click reveals the lines. */
+/**
+ * A selection, file or folder sent with a prompt, shown back in the user's bubble (all the same chip): a click reveals
+ * the lines / opens the file.
+ */
 export function SelectionChip(props: { att: ChatAttachment }) {
   const a = () => props.att;
   const base = () => a().name.replace(/:\d+(-\d+)?$/, '');
@@ -103,7 +114,7 @@ export function SelectionChip(props: { att: ChatAttachment }) {
         openAttachment(a());
       }}
     >
-      <Icon name="code" size={15} />
+      <Icon name={attKind(a()) === 'selection' ? 'code' : attKind(a()) === 'folder' ? 'folder' : 'file'} size={15} />
       <span class="user-range-name">{base()}</span>
       <Show when={a().lineStart}>
         <span class="user-range-lines">{a().lineEnd && a().lineEnd !== a().lineStart ? `${a().lineStart}–${a().lineEnd}` : a().lineStart}</span>

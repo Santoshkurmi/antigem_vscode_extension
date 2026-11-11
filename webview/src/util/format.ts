@@ -125,6 +125,8 @@ export function workspaceName(uri: string | null | undefined): string {
 }
 
 export function formatSize(bytes: number): string {
+  // a small file in bytes: rounded to KB it read "0 KB", as if it were empty
+  if (bytes < 1024) return `${bytes} B`;
   const kb = bytes / 1024;
   return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)} KB`;
 }

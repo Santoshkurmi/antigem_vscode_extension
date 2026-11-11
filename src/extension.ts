@@ -169,6 +169,15 @@ export function activate(context: vscode.ExtensionContext) {
     defaultAgent: () => cfg().get<AgentKind>('defaultAgent', 'AGY'),
     openFile: (p, line) => {
       const file = p.startsWith('file://') ? vscode.Uri.parse(p) : vscode.Uri.file(path.isAbsolute(p) ? p : path.join(homeDir(), p));
+      // a folder (a folder chip, an `@dir/` mention): shown in the Explorer, not opened as a document
+      try {
+        if (fs.statSync(file.fsPath).isDirectory()) {
+          void vscode.commands.executeCommand('revealInExplorer', file);
+          return;
+        }
+      } catch {
+        /* not there: the editor says so below */
+      }
       const opts: vscode.TextDocumentShowOptions = line ? { selection: new vscode.Range(line - 1, 0, line - 1, 0) } : {};
       void vscode.window.showTextDocument(file, opts).then(undefined, () => vscode.commands.executeCommand('vscode.open', file));
     },

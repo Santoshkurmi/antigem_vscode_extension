@@ -10,11 +10,15 @@ import { attKind, openAttachment, SelectionChip, useImageSrc } from './Attachmen
 import { ContextCompactedBanner, SummarizingCard } from './ContextCards';
 import { openTokenDetails } from './TokenDetails';
 import { Collapse, Dialog, Icon, IconButton } from '../ui/primitives';
-import { compactTokens, formatDuration, formatSize, shortModelName } from '../util/format';
+import { compactTokens, formatDuration, shortModelName } from '../util/format';
 import { copyText, send, state } from '../state/store';
 import { themeMode } from '../theme';
+import { findPathMentions, shortName } from '../util/mentions';
 
 // ------------------------------------------------------------------------------------------------ user
+
+/** A piece of a user prompt: typed text, an expanded slash command, or an `@path` mention. */
+type StyledPart = { t: string; cmd?: boolean; rel?: string };
 
 export function UserBubble(props: { msg: ChatMessage }) {
   const [actions, setActions] = createSignal(false);
@@ -42,26 +46,35 @@ export function UserBubble(props: { msg: ChatMessage }) {
     const id = state.chat.conversationId;
     if (id) send({ type: 'rewind', conversationId: id, messageId: props.msg.id, ...(restore ? { restoreFiles: true } : {}) });
   };
-  // slash commands that expanded (custom commands, plugins) stand out from the typed text (PromptExpansion.commandRanges)
+  // slash commands that expanded (custom commands, plugins) stand out from the typed text (PromptExpansion.commandRanges);
+  // `@path` mentions show as `@name` (the path on hover, a click opens the file)
   const styled = createMemo(() => {
     const t = text();
-    if (!t.includes('/')) return null;
-    const known = new Set((state.commands[agent()] ?? []).filter((c) => c.kind === 'custom' || c.kind === 'plugin').map((c) => c.command.toLowerCase()));
-    if (!known.size) return null;
-    const parts: { t: string; cmd: boolean }[] = [];
+    const marks: { start: number; end: number; part: StyledPart }[] = [];
+    const known = t.includes('/')
+      ? new Set((state.commands[agent()] ?? []).filter((c) => c.kind === 'custom' || c.kind === 'plugin').map((c) => c.command.toLowerCase()))
+      : new Set<string>();
+    if (known.size)
+      for (const m of t.matchAll(/(^|\s)(\/[\w:.-]+)/g)) {
+        const start = m.index! + m[1].length;
+        // a plugin is listed as `/plu:<id>:`; `/plu:<id>` and `/plu:<id>:<skill>` are that plugin too
+        const tok = m[2].toLowerCase();
+        const plu = /^\/plu:([^:]+)(:.*)?$/.exec(tok);
+        if (!known.has(tok) && !(plu && (known.has(`/plu:${plu[1]}:`) || known.has(`/plu:${plu[1]}`)))) continue;
+        marks.push({ start, end: start + m[2].length, part: { t: m[2], cmd: true } });
+      }
+    if (t.includes('@')) for (const f of findPathMentions(t)) marks.push({ start: f.start, end: f.end, part: { t: `@${shortName(f.rel)}`, rel: f.rel } });
+    if (!marks.length) return null;
+    marks.sort((a, b) => a.start - b.start);
+    const parts: StyledPart[] = [];
     let last = 0;
-    for (const m of t.matchAll(/(^|\s)(\/[\w:.-]+)/g)) {
-      const start = m.index! + m[1].length;
-      // a plugin is listed as `/plu:<id>:`; `/plu:<id>` and `/plu:<id>:<skill>` are that plugin too
-      const tok = m[2].toLowerCase();
-      const plu = /^\/plu:([^:]+)(:.*)?$/.exec(tok);
-      if (!known.has(tok) && !(plu && (known.has(`/plu:${plu[1]}:`) || known.has(`/plu:${plu[1]}`)))) continue;
-      if (start > last) parts.push({ t: t.substring(last, start), cmd: false });
-      parts.push({ t: m[2], cmd: true });
-      last = start + m[2].length;
+    for (const m of marks) {
+      if (m.start < last) continue;
+      if (m.start > last) parts.push({ t: t.substring(last, m.start) });
+      parts.push(m.part);
+      last = m.end;
     }
-    if (!parts.length) return null;
-    if (last < t.length) parts.push({ t: t.substring(last), cmd: false });
+    if (last < t.length) parts.push({ t: t.substring(last) });
     return parts;
   });
   const measure = () => {
@@ -93,12 +106,32 @@ export function UserBubble(props: { msg: ChatMessage }) {
           </div>
         </Show>
         <For each={ranges()}>{(a) => <SelectionChip att={a} />}</For>
-        <For each={docs()}>{(a) => <DocChip att={a} />}</For>
+        <For each={docs()}>{(a) => <SelectionChip att={a} />}</For>
         <Show when={text()}>
           <div>
             <div ref={textEl} class="user-text" classList={{ clamped: !expanded() }}>
               <Show when={styled()} fallback={text()}>
-                <For each={styled()!}>{(p) => (p.cmd ? <span class="user-cmd">{p.t}</span> : p.t)}</For>
+                <For each={styled()!}>
+                  {(p) =>
+                    p.cmd ? (
+                      <span class="user-cmd">{p.t}</span>
+                    ) : p.rel ? (
+                      <span
+                        class="user-mention"
+                        data-file
+                        title={p.rel}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          send({ type: 'openFile', path: p.rel! });
+                        }}
+                      >
+                        {p.t}
+                      </span>
+                    ) : (
+                      p.t
+                    )
+                  }
+                </For>
               </Show>
             </div>
             <Show when={expanded() || overflowing()}>
@@ -202,24 +235,6 @@ function UserImage(props: { att: ChatAttachment }) {
       <Show when={src()} fallback={<div class="user-image-wait"><Icon name="image" size={22} /></div>}>
         <img src={src()!} alt={props.att.name} />
       </Show>
-    </div>
-  );
-}
-
-function DocChip(props: { att: ChatAttachment }) {
-  return (
-    <div
-      class="user-doc"
-      data-file={props.att.path || undefined}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <Icon name={attKind(props.att) === 'folder' ? 'folder' : 'file'} size={24} color={attKind(props.att) === 'folder' ? 'var(--warning)' : 'var(--primary)'} />
-      <div class="user-doc-text">
-        <div class="user-doc-name">{props.att.name}</div>
-        <Show when={props.att.size > 0}>
-          <div class="user-doc-size">{formatSize(props.att.size)}</div>
-        </Show>
-      </div>
     </div>
   );
 }

@@ -33,15 +33,44 @@
   caret-color: var(--primary);
   overflow-y: auto;
 }
+/* `@name`s picked in the box: a layer behind it, laid out exactly like the box's text, marks them */
+.composer-text-wrap {
+  position: relative;
+}
+.composer-text-wrap .composer-text {
+  position: relative;
+  z-index: 1;
+}
+.composer-mirror {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  z-index: 0;
+  padding: 16px 20px;
+  font-size: calc(15 * var(--sp));
+  line-height: calc(21 * var(--sp));
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: transparent;
+  overflow: hidden;
+  pointer-events: none;
+}
+.composer-mention {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 20%, transparent);
+}
 .composer-text::placeholder {
   color: color-mix(in srgb, var(--on-surface) 42%, transparent);
   letter-spacing: calc(0.5 * var(--sp));
 }
+/* the chips wrap onto more rows (a sideways-scrolling row hid the ones past the edge) */
 .composer-atts {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 4px 6px;
-  overflow-x: auto;
   align-items: center;
 }
 .att-chip {
@@ -516,14 +545,6 @@
 .send-btn.bg {
   background: var(--warning);
 }
-/* the chips row scrolls like the app's (no visible scrollbar) */
-.composer-atts {
-  scrollbar-width: none;
-}
-.composer-atts::-webkit-scrollbar {
-  display: none;
-}
-
 /* a read-only chat (a Claude subagent's): the composer's place */
 .readonly-bar {
   display: flex;
@@ -561,4 +582,18 @@
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* a range chip's name: the name shortens, the line numbers (:12-30) always show */
+.range-name {
+  display: flex;
+  min-width: 0;
+}
+.range-lines {
+  flex-shrink: 0;
+  max-width: none;
+  overflow: visible;
+}
+.att-chip.k-selection .att-text {
+  max-width: 190px;
 }
