@@ -6,7 +6,7 @@ import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { Conversation } from '@shared/model';
 import type { ControlChipView } from '@shared/protocol';
 import { openLinkedConversation, setControl, state } from '../state/store';
-import { agentAccent, agentLabel } from '../util/format';
+import { agentAccent, agentLabel, relativeTime } from '../util/format';
 import { BottomSheet, DropdownMenu, Icon, type IconName } from '../ui/primitives';
 import { hasIcon } from '../ui/iconData';
 import { AgentMark } from './AgentStatus';
@@ -114,13 +114,37 @@ function chatSubagents(): Conversation[] {
 }
 
 /**
+ * The chat's subagents as the side bar shows them: each under the chat or subagent that started it (newest first at
+ * every level), with its depth.
+ */
+function subagentTree(agents: Conversation[]): { conv: Conversation; depth: number; children: number }[] {
+  const ids = new Set(agents.map((a) => a.id));
+  const byParent = new Map<string | null, Conversation[]>();
+  for (const a of agents) {
+    const p = a.parentConversationId && ids.has(a.parentConversationId) ? a.parentConversationId : null;
+    byParent.set(p, [...(byParent.get(p) ?? []), a]);
+  }
+  const out: { conv: Conversation; depth: number; children: number }[] = [];
+  const walk = (parent: string | null, depth: number) => {
+    for (const c of [...(byParent.get(parent) ?? [])].sort((a, b) => b.createdAt - a.createdAt)) {
+      out.push({ conv: c, depth, children: byParent.get(c.id)?.length ?? 0 });
+      walk(c.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
+/**
  * ClaudeChatControls.SubagentsChip: "2 agents" with a green dot while some of this chat's subagents work, "0 agents"
- * with a white dot when none does. A click lists them all; picking one opens its chat (Back returns here).
+ * with a white dot when none does. A click shows them as a tree (like the side bar); picking one opens its chat (Back
+ * returns here).
  */
 function SubagentsChip(props: { agents: Conversation[] }) {
   const [open, setOpen] = createSignal(false);
   let btn: HTMLButtonElement | undefined;
   const running = () => props.agents.filter((a) => a.isRunning).length;
+  const tree = createMemo(() => subagentTree(props.agents));
   const name = (a: Conversation) => a.subagentRole?.trim() || a.title || 'Subagent';
   return (
     <>
@@ -134,27 +158,58 @@ function SubagentsChip(props: { agents: Conversation[] }) {
         <span class="sub-chip-dot" />
         <span>{running() === 1 ? '1 agent' : `${running()} agents`}</span>
       </button>
-      <DropdownMenu anchor={() => btn} open={open()} onClose={() => setOpen(false)} minWidth={240} width={320} radius={12} background="var(--surface-container-high)">
+      <DropdownMenu anchor={() => btn} open={open()} onClose={() => setOpen(false)} minWidth={260} width={340} radius={14} background="var(--surface-container-high)">
         <div class="sub-menu-head">
-          Subagents · {running()} of {props.agents.length} running
+          <Icon name="call_split" size={16} color="var(--claude)" />
+          <span class="sub-menu-title">Subagents</span>
+          <span class="sub-menu-count">{props.agents.length}</span>
+          <span class="sub-menu-state" classList={{ live: running() > 0 }}>
+            <Show when={running() > 0} fallback={<>All done</>}>
+              <span class="sub-menu-state-dot" />
+              {running()} running
+            </Show>
+          </span>
         </div>
         <div class="sub-menu-list">
-          <For each={props.agents}>
-            {(a) => (
+          <For each={tree()}>
+            {(row) => (
               <button
-                class="sub-menu-item"
-                title={a.subagentTypeName ? `${name(a)} · ${a.subagentTypeName}` : name(a)}
+                class="sub-tree-row"
+                classList={{ live: row.conv.isRunning, nested: row.depth > 0 }}
+                style={{ 'padding-left': `${10 + row.depth * 18}px` }}
+                title={row.conv.subagentTypeName ? `${name(row.conv)} · ${row.conv.subagentTypeName}` : name(row.conv)}
                 onClick={() => {
                   setOpen(false);
-                  openLinkedConversation(a.id);
+                  openLinkedConversation(row.conv.id);
                 }}
               >
-                <span class="sub-menu-dot" classList={{ live: a.isRunning }} />
-                <span class="sub-menu-text">
-                  <span class="sub-menu-name">{name(a)}</span>
-                  <span class="sub-menu-sub">{[a.subagentTypeName?.trim() || null, a.isRunning ? 'running' : 'done'].filter(Boolean).join(' · ')}</span>
+                {/* the tree's guide lines: one per level above this row */}
+                <For each={Array.from({ length: row.depth }, (_, i) => i)}>
+                  {(i) => <span class="sub-tree-guide" style={{ left: `${19 + i * 18}px` }} />}
+                </For>
+                <span class="sub-tree-icon">
+                  <Icon name={row.depth > 0 ? 'call_split' : 'smart_toy'} size={15} />
+                  <Show when={row.conv.isRunning}>
+                    <span class="sub-tree-live" />
+                  </Show>
                 </span>
-                <Icon name="chevron_right" size={16} class="sub-menu-go" />
+                <span class="sub-tree-text">
+                  <span class="sub-tree-name">{name(row.conv)}</span>
+                  <span class="sub-tree-meta">
+                    <Show when={row.conv.subagentTypeName?.trim()}>
+                      <span class="sub-tree-type">{row.conv.subagentTypeName}</span>
+                    </Show>
+                    <span class="sub-tree-status">{row.conv.isRunning ? 'running' : 'done'}</span>
+                    <Show when={row.children}>
+                      <span class="sub-tree-kids">
+                        <Icon name="call_split" size={11} />
+                        {row.children}
+                      </span>
+                    </Show>
+                  </span>
+                </span>
+                <span class="sub-tree-time">{relativeTime(row.conv.updatedAt)}</span>
+                <Icon name="chevron_right" size={16} class="sub-tree-go" />
               </button>
             )}
           </For>
