@@ -669,10 +669,11 @@ export type ViewToHost =
   | { type: 'readImage'; reqId: string; path: string }
   /**
    * An address the chat can frame or play (the local preview server): an Interactive App's HTML (`html`), an app's
-   * .html file on disk (`htmlFile`), a local video / audio file (`file`) or a YouTube video id (`youtube`). Answered
+   * .html file on disk (`htmlFile`), a local video / audio file (`file`), a player page for one (`player`: what a VS
+   * Code webview can play) or a YouTube video id (`youtube`). Answered
    * with mediaUrl.
    */
-  | { type: 'mediaUrl'; reqId: string; kind: 'html' | 'htmlFile' | 'file' | 'youtube'; value: string; start?: number }
+  | { type: 'mediaUrl'; reqId: string; kind: 'html' | 'htmlFile' | 'file' | 'player' | 'youtube'; value: string; start?: number }
   /** Files / folders dropped on the view (VS Code explorer or OS): answered with `attachments {reqId}`. */
   | { type: 'resolveDrop'; reqId: string; uris: string[] }
   /** Search the content of chats (drawer deep search): answered with chatSearchResult. */

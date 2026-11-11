@@ -1,14 +1,16 @@
-// ui/models/ModelSelectorBottomSheet.kt + QuotaGroupUi.kt + ui/agents/AgentSheetUi.kt: the model picker as a bottom
-// sheet — agent header with refresh, one section per quota group (its limits as meters), model cards with an
-// "Active" badge and a sliding Low / Medium / High selector for models that come in tiers.
-import { createEffect, createMemo, createSignal, For, type JSX, Show } from 'solid-js';
+// The model picker, made for a desktop: a dropdown anchored above the composer's model pill (not a full-screen sheet).
+// Same content as the app's ModelSelectorBottomSheet / QuotaGroupUi: one section per quota group with its limits on
+// top, models that come in tiers (Low / Medium / High, Codex reasoning effort) as one row with a tier switch, the
+// quota group editor, the "pill shows 5h / 7d" choice. Search at the top; ↑ ↓ move, ← → tier, Enter picks, Esc closes.
+import { createEffect, createMemo, createSignal, For, type JSX, on, onCleanup, Show } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import type { AgentKind, AiModel } from '@shared/model';
 import type { ModelGroupView, QuotaWindowView } from '@shared/protocol';
 import { requestModels, selectModel, send, state } from '../state/store';
-import { BottomSheet, DropdownMenu, Icon, IconButton } from '../ui/primitives';
+import { DropdownMenu, Icon, IconButton, nextFrame } from '../ui/primitives';
 import { AgentMark } from './AgentStatus';
 import { agentAccent, agentLabel } from '../util/format';
-import { modelSheetOpen, setModelSheetOpen } from './InputBar';
+import { modelPillEl, modelSheetOpen, setModelSheetOpen } from './InputBar';
 import { quotaPillWindow } from '../theme';
 import { openSettings, setUiPref } from '../state/settings';
 
@@ -30,9 +32,12 @@ function tierOf(m: AiModel): string {
   return '';
 }
 
+/** "Medium" → "Med" on the small tier chips. */
+const shortTier = (t: string) => (/^medium$/i.test(t) ? 'Med' : t);
+
 /**
- * Models that come in tiers (Low / Medium / High, or a Codex reasoning effort) share one card with a tier selector.
- * Only models with a tier are merged: OpenCode sends the provider as baseName, and its models stay one card each.
+ * Models that come in tiers (Low / Medium / High, or a Codex reasoning effort) share one row with a tier switch.
+ * Only models with a tier are merged: OpenCode sends the provider as baseName, and its models stay one row each.
  */
 function families(models: AiModel[], agent: AgentKind): Family[] {
   const map = new Map<string, AiModel[]>();
@@ -64,212 +69,438 @@ function groupAccent(agent: AgentKind, name: string | null): string {
   return '#14B8A6';
 }
 
+const quotaColor = (left: number) => (left > 0.5 ? 'var(--success)' : left > 0.2 ? 'var(--warning)' : 'var(--danger)');
+
+interface Section {
+  group: ModelGroupView | null;
+  title: string;
+  accent: string;
+  fams: Family[];
+}
+
+const WIDTH = 420;
+
 export function ModelSheet() {
   const agent = () => state.chat.agent;
   const ms = () => state.models[agent()];
+  const accent = () => agentAccent(agent());
   const selectedId = () => {
     const own = state.chat.modelId;
     const mine = own ? ms()?.models.find((m) => m.id === own || m.key === own) : undefined;
     return mine?.id ?? ms()?.selectedId ?? ms()?.models.find((m) => m.isDefault)?.id ?? null;
   };
+  const close = () => setModelSheetOpen(false);
+
   // quota group edit mode (EditGroupsAction / GroupMoveButton): which limit each model counts against
   const [editing, setEditing] = createSignal(false);
-  createEffect(() => modelSheetOpen() || setEditing(false));
   const editableGroups = () => (ms()?.groups ?? []).filter((g) => !!g);
-  // OpenCode's long provider lists get a search box (OpenCodeModelSheet.kt: more than 8 models)
   const [query, setQuery] = createSignal('');
-  createEffect(() => modelSheetOpen() && setQuery(''));
-  const searchable = () => agent() === 'OPENCODE' && (ms()?.models.length ?? 0) > 8;
-  const sections = createMemo(() => {
+
+  const sections = createMemo<Section[]>(() => {
     const s0 = ms();
     if (!s0) return [];
-    const q = searchable() ? query().trim().toLowerCase() : '';
-    const s = q
-      ? { ...s0, models: s0.models.filter((m) => `${m.displayName} ${m.id} ${m.description}`.toLowerCase().includes(q)) }
-      : s0;
-    const groups: (ModelGroupView | null)[] = s.groups?.length ? [...s.groups] : [];
+    const q = query().trim().toLowerCase();
+    const models = q ? s0.models.filter((m) => `${m.displayName} ${m.baseName} ${m.id} ${m.description} ${m.group ?? ''}`.toLowerCase().includes(q)) : s0.models;
+    const groups: ModelGroupView[] = s0.groups?.length ? [...s0.groups] : [];
     const byGroup = new Map<string | null, AiModel[]>();
-    for (const m of s.models) {
+    for (const m of models) {
       const g = m.group && (groups.length === 0 || groups.some((x) => x?.name === m.group)) ? m.group : null;
       byGroup.set(g, [...(byGroup.get(g) ?? []), m]);
     }
-    const out: { group: ModelGroupView | null; title: string; fams: Family[] }[] = [];
-    for (const g of groups) if (g && byGroup.has(g.name)) out.push({ group: g, title: g.name, fams: families(byGroup.get(g.name)!, s.agent) });
+    const out: Section[] = [];
+    for (const g of groups)
+      if (g && byGroup.has(g.name)) out.push({ group: g, title: g.name, accent: groupAccent(s0.agent, g.name), fams: families(byGroup.get(g.name)!, s0.agent) });
     for (const [name, list] of byGroup) {
       if (name && groups.some((g) => g?.name === name)) continue;
-      out.push({ group: name ? { name } : null, title: name ?? (s.groups?.length || byGroup.size > 1 ? 'Other models' : 'All models'), fams: families(list, s.agent) });
+      out.push({
+        group: name ? { name } : null,
+        title: name ?? (s0.groups?.length || byGroup.size > 1 ? 'Other models' : 'All models'),
+        accent: groupAccent(s0.agent, name),
+        fams: families(list, s0.agent),
+      });
     }
     return out;
   });
-  const pick = (id: string) => {
-    selectModel(agent(), id);
-    setModelSheetOpen(false);
+  /** Every row in order (keyboard moves through them). */
+  const rows = createMemo(() => sections().flatMap((sec) => sec.fams.map((fam) => ({ fam, accent: sec.accent }))));
+  const activeVariant = (f: Family) => f.variants.findIndex((v) => v.model.id === selectedId());
+  const defaultVariant = (f: Family) => {
+    const a = activeVariant(f);
+    if (a >= 0) return a;
+    const d = f.variants.findIndex((v) => v.model.isDefault);
+    if (d >= 0) return d;
+    const m = f.variants.findIndex((v) => tierRank(v.tier) === 2);
+    return m >= 0 ? m : 0;
   };
 
+  // keyboard: the row under the cursor and the tier ← → chose in it
+  const [cursor, setCursor] = createSignal(0);
+  const [tierAt, setTierAt] = createSignal<number | null>(null);
+  const rowEls: HTMLElement[] = [];
+  const moveCursor = (i: number) => {
+    const n = rows().length;
+    if (!n) return;
+    const next = (i + n) % n;
+    setCursor(next);
+    setTierAt(null);
+    rowEls[next]?.scrollIntoView({ block: 'nearest' });
+  };
+  // a new search: the first match is under the cursor
+  createEffect(on(query, () => moveCursor(0), { defer: true }));
+
+  const pick = (id: string) => {
+    selectModel(agent(), id);
+    close();
+  };
+  const pickRow = (i: number) => {
+    const r = rows()[i];
+    if (!r) return;
+    const t = tierAt();
+    const v = r.fam.variants[t != null && i === cursor() ? t : defaultVariant(r.fam)];
+    if (v) pick(v.model.id);
+  };
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (editing()) setEditing(false);
+      else close();
+      return;
+    }
+    if (editing()) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveCursor(cursor() + (e.key === 'ArrowDown' ? 1 : -1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      pickRow(cursor());
+    } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !query()) {
+      const r = rows()[cursor()];
+      if (!r || r.fam.variants.length < 2) return;
+      e.preventDefault();
+      const cur = tierAt() ?? defaultVariant(r.fam);
+      setTierAt(Math.max(0, Math.min(r.fam.variants.length - 1, cur + (e.key === 'ArrowRight' ? 1 : -1))));
+    }
+  };
+
+  // ---- placement: above the pill, its left edge on the pill's, inside the window
+  const [pos, setPos] = createSignal<{ left: number; bottom: number; width: number; maxHeight: number } | null>(null);
+  const place = () => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = Math.min(WIDTH, vw - 16);
+    const r = modelPillEl()?.getBoundingClientRect();
+    if (!r || r.width === 0) {
+      setPos({ left: Math.max(8, (vw - width) / 2), bottom: 80, width, maxHeight: Math.min(560, vh - 100) });
+      return;
+    }
+    const left = Math.max(8, Math.min(r.left, vw - width - 8));
+    const bottom = vh - r.top + 6;
+    setPos({ left, bottom, width, maxHeight: Math.max(220, Math.min(600, r.top - 14)) });
+  };
+
+  let pop: HTMLDivElement | undefined;
+  let search: HTMLInputElement | undefined;
+  const outside = (e: PointerEvent) => {
+    const t = e.target as Node;
+    if (pop?.contains(t) || modelPillEl()?.contains(t)) return;
+    // a menu of this picker (move to group) sits in its own portal
+    if ((t as HTMLElement).closest?.('.dropdown-menu, .menu')) return;
+    close();
+  };
+  createEffect(
+    on(modelSheetOpen, (open) => {
+      if (!open) {
+        setEditing(false);
+        return;
+      }
+      setQuery('');
+      setTierAt(null);
+      place();
+      const i = rows().findIndex((r) => activeVariant(r.fam) >= 0);
+      setCursor(Math.max(0, i));
+      nextFrame(() => {
+        search?.focus();
+        rowEls[Math.max(0, i)]?.scrollIntoView({ block: 'center' });
+      });
+      // keys work wherever the focus is while the picker is open (a click inside it moves the focus off the search);
+      // typing that starts elsewhere goes into the search
+      const keys = (e: KeyboardEvent) => {
+        // while editing groups, only Escape is ours (the group menus use the other keys)
+        if (editing() && e.key !== 'Escape') return;
+        if (['Escape', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(e.key)) {
+          onKey(e);
+          e.stopPropagation();
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && document.activeElement !== search && !editing()) search?.focus();
+      };
+      window.addEventListener('resize', place);
+      document.addEventListener('pointerdown', outside, true);
+      document.addEventListener('keydown', keys, true);
+      onCleanup(() => {
+        window.removeEventListener('resize', place);
+        document.removeEventListener('pointerdown', outside, true);
+        document.removeEventListener('keydown', keys, true);
+      });
+    }),
+  );
+
+  const showsFiveH = () => !!ms()?.groups?.some((g) => g.windows?.some((w) => /^5h$|5 ?h|five/i.test(w.label)));
+  const count = () => ms()?.models.length ?? 0;
+
   return (
-    <BottomSheet open={modelSheetOpen()} onClose={() => setModelSheetOpen(false)} class="model-sheet">
-      <div class="sheet-header">
-        <AgentMark agent={agent()} size={36} />
-        <div class="sheet-titles">
-          <div class="sheet-title">Select model</div>
-          <div class="sheet-sub" style={{ color: agentAccent(agent()) }}>
-            {agentLabel(agent())} · {ms()?.models.length ? `${ms()!.models.length} models` : 'no models loaded'}
-          </div>
-        </div>
-        <Show when={editableGroups().length > 1 && ms()?.models.length}>
-          <button
-            class="edit-groups-btn"
-            classList={{ on: editing() }}
-            style={{ '--accent': agentAccent(agent()) }}
-            title={editing() ? 'Done editing groups' : 'Edit quota groups'}
-            onClick={() => setEditing(!editing())}
-          >
-            <Icon name={editing() ? 'check' : 'edit_o'} size={18} />
-          </button>
-        </Show>
-        <IconButton
-          icon="refresh"
-          size={38}
-          iconSize={20}
-          color={agentAccent(agent())}
-          class={ms()?.refreshing ? 'spinning' : undefined}
-          title="Refresh"
-          onClick={() => requestModels(agent(), true)}
-        />
-      </div>
-      <Show
-        when={!editing()}
-        fallback={
-          <div class="edit-groups-banner" style={{ '--accent': agentAccent(agent()) }}>
-            <Icon name="tune" size={18} />
-            <div class="edit-groups-text">
-              <div class="edit-groups-title">Edit quota groups</div>
-              <div class="edit-groups-hint">Pick which limit each model counts against.</div>
-            </div>
-            <button class="text-btn" style={{ color: 'var(--accent)' }} onClick={() => setEditing(false)}>
-              Done
-            </button>
-          </div>
-        }
-      >
-        <Show when={ms()?.groups?.some((g) => g.windows?.some((w) => /^5h$|5 ?h|five/i.test(w.label)))}>
-          <PillWindowRow accent={agentAccent(agent())} />
-        </Show>
-      </Show>
-      <Show when={searchable()}>
-        <div class="sheet-search">
-          <Icon name="search" size={18} />
-          <input placeholder="Search models or providers" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
-        </div>
-      </Show>
-      <div class="sheet-list">
-        <Show
-          when={ms()?.models.length}
-          fallback={
-            <div class="no-models">
-              <div class="no-models-title">No models loaded</div>
-              <div class="no-models-sub">Sign in to the agent or tap refresh to load its models.</div>
-            </div>
-          }
-        >
-          <For each={sections()}>
-            {(sec) => {
-              const accent = () => groupAccent(agent(), sec.group?.name ?? null);
-              return (
-                <>
-                  <div class="quota-group">
-                    <div class="quota-group-row">
-                      <span class="quota-group-dot" style={{ background: accent() }} />
-                      <span class="quota-group-title">{sec.title.toUpperCase()}</span>
-                      <span class="quota-group-count">{sec.fams.length === 1 ? '1 model' : `${sec.fams.length} models`}</span>
-                    </div>
-                    <Show when={sec.group?.windows?.length}>
-                      <div class="quota-meters">
-                        <For each={sec.group!.windows}>{(w) => <QuotaMeter w={w} />}</For>
-                      </div>
-                    </Show>
-                  </div>
-                  <For each={sec.fams}>
-                    {(f) => (
-                      <ModelCard
-                        family={f}
-                        selectedId={selectedId()}
-                        accent={accent()}
-                        onPick={pick}
-                        groupControl={
-                          editing() ? (
-                            <GroupMoveButton
-                              current={sec.group?.name ?? null}
-                              groups={editableGroups()}
-                              accent={accent()}
-                              onPick={(g) => send({ type: 'setQuotaGroup', agent: agent(), modelId: f.variants[0].model.id, group: g })}
-                            />
-                          ) : undefined
-                        }
-                      />
-                    )}
-                  </For>
-                </>
-              );
-            }}
-          </For>
-        </Show>
-      </div>
-      {/* the per-agent sheets' way to their settings (OpenCodeModelSheet / CodexModelSheet) */}
-      <Show when={agent() === 'OPENCODE' || agent() === 'CODEX'}>
-        <button
-          class="sheet-link"
-          onClick={() => {
-            setModelSheetOpen(false);
-            openSettings(agent() === 'OPENCODE' ? { id: 'opencode', title: 'OpenCode' } : { id: 'codex', title: 'Codex' });
+    <Show when={modelSheetOpen() && pos()}>
+      <Portal>
+        <div
+          ref={pop}
+          class="mp-pop"
+          role="dialog"
+          aria-label="Select model"
+          style={{
+            left: `${pos()!.left}px`,
+            bottom: `${pos()!.bottom}px`,
+            width: `${pos()!.width}px`,
+            'max-height': `${pos()!.maxHeight}px`,
+            '--accent': accent(),
           }}
         >
-          <Icon name="settings" size={16} />
-          {agent() === 'OPENCODE' ? 'Connect providers or add an OpenAI-compatible endpoint' : 'Codex account and settings'}
-        </button>
-      </Show>
-    </BottomSheet>
+          <div class="mp-head">
+            <AgentMark agent={agent()} size={22} />
+            <div class="mp-titles">
+              <span class="mp-title">{agentLabel(agent())}</span>
+              <span class="mp-count">{count() ? `${count()} models` : 'no models'}</span>
+            </div>
+            <Show when={editableGroups().length > 1 && count()}>
+              <IconButton
+                icon={editing() ? 'check' : 'tune'}
+                size={28}
+                iconSize={16}
+                color={editing() ? 'var(--accent)' : 'var(--on-surface-variant)'}
+                title={editing() ? 'Done editing quota groups' : 'Edit quota groups'}
+                onClick={() => setEditing(!editing())}
+              />
+            </Show>
+            <IconButton
+              icon="refresh"
+              size={28}
+              iconSize={16}
+              color="var(--on-surface-variant)"
+              class={ms()?.refreshing ? 'spinning' : undefined}
+              title="Reload models and usage"
+              onClick={() => requestModels(agent(), true)}
+            />
+          </div>
+
+          <Show
+            when={!editing()}
+            fallback={
+              <div class="mp-editing">
+                <Icon name="tune" size={15} />
+                <span>Pick which limit each model counts against.</span>
+              </div>
+            }
+          >
+            <div class="mp-search">
+              <Icon name="search" size={15} />
+              <input ref={search} placeholder="Search models" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} spellcheck={false} />
+              <Show when={query()}>
+                <button class="mp-clear" title="Clear" onClick={() => (setQuery(''), search?.focus())}>
+                  <Icon name="close" size={14} />
+                </button>
+              </Show>
+            </div>
+          </Show>
+
+          <div class="mp-list">
+            <Show
+              when={count()}
+              fallback={
+                <div class="mp-empty">
+                  <div class="mp-empty-title">No models loaded</div>
+                  <div>Sign in to the agent, or reload.</div>
+                </div>
+              }
+            >
+              <Show when={rows().length} fallback={<div class="mp-empty">No model matches “{query()}”</div>}>
+                <For each={sections()}>
+                  {(sec) => (
+                    <div class="mp-section">
+                      <div class="mp-group">
+                        <div class="mp-group-row">
+                          <span class="mp-dot" style={{ background: sec.accent }} />
+                          <span class="mp-group-name">{sec.title}</span>
+                          <span class="mp-group-count">{sec.fams.length}</span>
+                        </div>
+                        <Show when={sec.group?.windows?.length}>
+                          <div class="mp-meters">
+                            <For each={sec.group!.windows}>{(w) => <Meter w={w} />}</For>
+                          </div>
+                        </Show>
+                      </div>
+                      <For each={sec.fams}>
+                        {(f) => {
+                          const i = rows().findIndex((r) => r.fam === f);
+                          return (
+                            <Row
+                              ref={(el) => (rowEls[i] = el)}
+                              family={f}
+                              accent={sec.accent}
+                              selectedId={selectedId()}
+                              cursor={cursor() === i}
+                              pendingTier={cursor() === i ? tierAt() : null}
+                              onHover={() => !editing() && (setCursor(i), setTierAt(null))}
+                              onPick={(id) => (editing() ? undefined : pick(id))}
+                              onPickRow={() => (editing() ? undefined : pickRow(i))}
+                              groupControl={
+                                editing() ? (
+                                  <GroupMoveButton
+                                    current={sec.group?.name ?? null}
+                                    groups={editableGroups()}
+                                    accent={sec.accent}
+                                    onPick={(g) => send({ type: 'setQuotaGroup', agent: agent(), modelId: f.variants[0].model.id, group: g })}
+                                  />
+                                ) : undefined
+                              }
+                            />
+                          );
+                        }}
+                      </For>
+                    </div>
+                  )}
+                </For>
+              </Show>
+            </Show>
+          </div>
+
+          <div class="mp-foot">
+            <Show
+              when={showsFiveH()}
+              fallback={
+                <span class="mp-keys">
+                  <kbd>↑</kbd>
+                  <kbd>↓</kbd> move <kbd>⏎</kbd> pick
+                </span>
+              }
+            >
+              <span class="mp-foot-label" title="The share left shown next to the model name in the chat (models with no 5h limit show 7d)">
+                Pill shows
+              </span>
+              <div class="mp-seg">
+                <For each={['5h', '7d'] as const}>
+                  {(w) => (
+                    <button classList={{ on: quotaPillWindow() === w }} onClick={() => setUiPref('quotaPillWindow', w)}>
+                      {w}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <span class="mp-spacer" />
+            <Show when={agent() === 'OPENCODE' || agent() === 'CODEX'}>
+              <button
+                class="mp-link"
+                onClick={() => {
+                  close();
+                  openSettings(agent() === 'OPENCODE' ? { id: 'opencode.providers', title: 'Providers' } : { id: 'codex', title: 'Codex' });
+                }}
+              >
+                <Icon name="settings" size={13} />
+                {agent() === 'OPENCODE' ? 'Providers' : 'Codex settings'}
+              </button>
+            </Show>
+          </div>
+        </div>
+      </Portal>
+    </Show>
   );
 }
 
-/** "Shown in chat [5h | 7d]": which limit the model pill in the chat shows (QuotaGroupUi.PillWindowRow). */
-function PillWindowRow(props: { accent: string }) {
+/** One usage limit of a group: "5h ▬▬▬▬▭ 91.7% · 2h 1m" (aligned with the others of the group). */
+function Meter(props: { w: QuotaWindowView }) {
+  const left = () => Math.max(0, Math.min(1, props.w.remaining));
   return (
-    <div class="pill-window-row">
-      <div class="pill-window-text">
-        <div class="pill-window-title">Shown in chat</div>
-        <div class="pill-window-hint">Share left next to the model name. Models with no 5h limit show 7d.</div>
-      </div>
-      <div class="segmented" style={{ '--accent': props.accent }}>
-        <For each={['5h', '7d'] as const}>
-          {(w) => (
-            <button class="segment" classList={{ on: quotaPillWindow() === w }} onClick={() => setUiPref('quotaPillWindow', w)}>
-              {w}
-            </button>
-          )}
-        </For>
-      </div>
+    <div class="mp-meter" title={`${props.w.label}: ${props.w.text?.trim() || `${Math.round(left() * 100)}%`} left${props.w.resetText ? `, resets in ${props.w.resetText}` : ''}`}>
+      <span class="mp-meter-label">{props.w.label}</span>
+      <span class="mp-bar">
+        <span style={{ width: `${left() * 100}%`, background: quotaColor(left()) }} />
+      </span>
+      <span class="mp-meter-val" style={{ color: quotaColor(left()) }}>
+        {props.w.text?.trim() || `${Math.round(left() * 100)}%`}
+      </span>
+      <span class="mp-meter-reset">{props.w.resetText ? `↻ ${props.w.resetText}` : ''}</span>
     </div>
   );
 }
 
-function quotaColor(left: number) {
-  return left > 0.5 ? 'var(--success)' : left > 0.2 ? 'var(--warning)' : 'var(--danger)';
-}
-
-function QuotaMeter(props: { w: QuotaWindowView }) {
-  const left = () => Math.max(0, Math.min(1, props.w.remaining));
+function Row(props: {
+  ref: (el: HTMLElement) => void;
+  family: Family;
+  accent: string;
+  selectedId: string | null;
+  cursor: boolean;
+  pendingTier: number | null;
+  onHover: () => void;
+  onPick: (id: string) => void;
+  onPickRow: () => void;
+  groupControl?: JSX.Element;
+}) {
+  const activeIdx = () => props.family.variants.findIndex((v) => v.model.id === props.selectedId);
+  const active = () => activeIdx() >= 0;
+  const tiered = () => props.family.variants.length > 1;
   return (
-    <div class="quota-meter">
-      <span class="quota-label">{props.w.label}</span>
-      <span class="quota-track">
-        <span class="quota-fill" style={{ width: `${left() * 100}%`, background: quotaColor(left()) }} />
+    <div
+      ref={props.ref}
+      class="mp-row"
+      classList={{ active: active(), cursor: props.cursor }}
+      style={{ '--row-accent': props.accent }}
+      role="option"
+      aria-selected={active()}
+      onPointerMove={() => !props.cursor && props.onHover()}
+      onClick={props.onPickRow}
+    >
+      <span class="mp-check">
+        <Show when={active()}>
+          <Icon name="check" size={15} />
+        </Show>
       </span>
-      <span class="quota-pct" style={{ color: quotaColor(left()) }}>
-        {props.w.text?.trim() || `${Math.round(left() * 100)}%`}
-      </span>
-      <Show when={props.w.resetText}>
-        <span class="quota-time"> · {props.w.resetText}</span>
+      <div class="mp-row-text">
+        <div class="mp-name">{props.family.name}</div>
+        <Show when={props.family.description}>
+          <div class="mp-desc" title={props.family.description}>
+            {props.family.description}
+          </div>
+        </Show>
+      </div>
+      <Show when={props.groupControl} fallback={
+        <Show when={tiered()}>
+          <div class="mp-tiers" onClick={(e) => e.stopPropagation()}>
+            <For each={props.family.variants}>
+              {(v, i) => {
+                const level = () => {
+                  const r = tierRank(v.tier);
+                  return r >= 1 && r <= 3 ? r : 0;
+                };
+                return (
+                  <button
+                    class="mp-tier"
+                    classList={{ on: i() === activeIdx(), pending: props.pendingTier === i() }}
+                    title={`${props.family.name} · ${v.tier || v.model.displayName}`}
+                    onClick={() => props.onPick(v.model.id)}
+                  >
+                    <Show when={level()}>
+                      <span class="mp-tier-bars">
+                        <For each={[1, 2, 3]}>{(b) => <span style={{ height: `${2 + b * 2.5}px`, opacity: b <= level() ? 1 : 0.3 }} />}</For>
+                      </span>
+                    </Show>
+                    {shortTier(v.tier || v.model.displayName)}
+                  </button>
+                );
+              }}
+            </For>
+          </div>
+        </Show>
+      }>
+        <div onClick={(e) => e.stopPropagation()}>{props.groupControl}</div>
       </Show>
     </div>
   );
@@ -279,7 +510,7 @@ function QuotaMeter(props: { w: QuotaWindowView }) {
 function GroupMoveButton(props: { current: string | null; groups: ModelGroupView[]; accent: string; onPick: (g: string | null) => void }) {
   const [open, setOpen] = createSignal(false);
   let btn: HTMLButtonElement | undefined;
-  const limits = (g: ModelGroupView) => (g.windows ?? []).map((w) => `${w.label} ${Math.round(w.remaining * 100)}%`).join(' · ');
+  const limits = (g: ModelGroupView) => (g.windows ?? []).map((w) => `${w.label} ${w.text?.trim() || `${Math.round(w.remaining * 100)}%`}`).join(' · ');
   return (
     <>
       <button
@@ -325,82 +556,3 @@ function GroupMoveButton(props: { current: string | null; groups: ModelGroupView
     </>
   );
 }
-
-function ModelCard(props: { family: Family; selectedId: string | null; accent: string; onPick: (id: string) => void; groupControl?: JSX.Element }) {
-  const active = () => props.family.variants.find((v) => v.model.id === props.selectedId);
-  const defaultVariant = () =>
-    props.family.variants.find((v) => v.model.isDefault) ?? props.family.variants.find((v) => tierRank(v.tier) === 2) ?? props.family.variants[0];
-  return (
-    <div
-      class="model-card"
-      classList={{ active: !!active() }}
-      style={{ '--accent': props.accent }}
-      role="button"
-      tabIndex={0}
-      onClick={() => props.onPick((active() ?? defaultVariant()).model.id)}
-      onKeyDown={(e) => e.key === 'Enter' && props.onPick((active() ?? defaultVariant()).model.id)}
-    >
-      <div class="model-card-row">
-        <div class="model-card-text">
-          <div class="model-card-name">{props.family.name}</div>
-          <Show when={props.family.description}>
-            <div class="model-card-desc">{props.family.description}</div>
-          </Show>
-        </div>
-        <Show when={active()}>
-          <span class="active-badge">
-            <Icon name="check" size={12} />
-            Active
-          </span>
-        </Show>
-      </div>
-      <Show when={props.family.variants.length > 1}>
-        <TierSelector variants={props.family.variants} selectedId={props.selectedId} onPick={props.onPick} />
-      </Show>
-      <Show when={props.groupControl}>
-        <div class="model-card-group" onClick={(e) => e.stopPropagation()}>
-          {props.groupControl}
-        </div>
-      </Show>
-    </div>
-  );
-}
-
-/** Low / Medium / High in one track with a highlight that slides to the chosen tier. */
-function TierSelector(props: { variants: { model: AiModel; tier: string }[]; selectedId: string | null; onPick: (id: string) => void }) {
-  const idx = () => props.variants.findIndex((v) => v.model.id === props.selectedId);
-  const n = () => props.variants.length;
-  return (
-    <div class="tier-track" onClick={(e) => e.stopPropagation()}>
-      <span
-        class="tier-highlight"
-        style={{
-          width: `calc((100% - 6px) / ${n()})`,
-          transform: `translateX(${Math.max(0, idx()) * 100}%)`,
-          opacity: idx() >= 0 ? 1 : 0,
-        }}
-      />
-      <For each={props.variants}>
-        {(v, i) => {
-          const level = () => {
-            const r = tierRank(v.tier);
-            return r >= 1 && r <= 3 ? r : 0;
-          };
-          return (
-            <button class="tier" classList={{ on: i() === idx() }} onClick={() => props.onPick(v.model.id)}>
-              <Show when={level()}>
-                <span class="tier-bars">
-                  <For each={[1, 2, 3]}>
-                    {(b) => <span style={{ height: `${3 + b * 3}px`, opacity: b <= level() ? 1 : 0.28 }} />}
-                  </For>
-                </span>
-              </Show>
-              <span>{v.tier || v.model.displayName}</span>
-            </button>
-          );
-        }}
-      </For>
-    </div>
-  );
-}
-

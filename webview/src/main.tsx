@@ -18,6 +18,7 @@ import './styles/drawer.css';
 import './styles/panels.css';
 import './styles/settings.css';
 import './styles/media.css';
+import './styles/modelpicker.css';
 import './styles/context.css';
 import './styles/accounts.css';
 import './styles/agentsetup.css';

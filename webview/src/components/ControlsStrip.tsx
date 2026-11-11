@@ -2,11 +2,12 @@
 // ui/codex/CodexChatUi.kt CodexControlsStrip, ui/opencode/OpenCodeChatUi.kt OpenCodeControlsStrip): a scrolling row
 // of ControlChips (ClaudeUiKit.kt). The host sends the chips (ChatPatch.controls); 'select' opens a picker sheet
 // (ClaudePickerSheet + PickerOption), 'toggle' flips on / off, 'info' only shows (cache timer, context, plan usage).
-import { createSignal, For, Show } from 'solid-js';
+import { createMemo, createSignal, For, Show } from 'solid-js';
+import type { Conversation } from '@shared/model';
 import type { ControlChipView } from '@shared/protocol';
-import { setControl, state } from '../state/store';
+import { openLinkedConversation, setControl, state } from '../state/store';
 import { agentAccent, agentLabel } from '../util/format';
-import { BottomSheet, Icon, type IconName } from '../ui/primitives';
+import { BottomSheet, DropdownMenu, Icon, type IconName } from '../ui/primitives';
 import { hasIcon } from '../ui/iconData';
 import { AgentMark } from './AgentStatus';
 
@@ -89,7 +90,86 @@ function titleOf(c: ControlChipView): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** Every subagent of the chat on screen, nested ones included (newest first). */
+function chatSubagents(): Conversation[] {
+  const root = state.chat.conversationId;
+  if (!root) return [];
+  const byParent = new Map<string, Conversation[]>();
+  for (const c of state.conversations) {
+    const p = c.parentConversationId;
+    if (p && p !== c.id) byParent.set(p, [...(byParent.get(p) ?? []), c]);
+  }
+  const out: Conversation[] = [];
+  const seen = new Set<string>([root]);
+  const walk = (id: string) => {
+    for (const c of byParent.get(id) ?? []) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push(c);
+      walk(c.id);
+    }
+  };
+  walk(root);
+  return out.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/**
+ * ClaudeChatControls.SubagentsChip: "2 agents" with a green dot while some of this chat's subagents work, "0 agents"
+ * with a white dot when none does. A click lists them all; picking one opens its chat (Back returns here).
+ */
+function SubagentsChip(props: { agents: Conversation[] }) {
+  const [open, setOpen] = createSignal(false);
+  let btn: HTMLButtonElement | undefined;
+  const running = () => props.agents.filter((a) => a.isRunning).length;
+  const name = (a: Conversation) => a.subagentRole?.trim() || a.title || 'Subagent';
+  return (
+    <>
+      <button
+        ref={btn}
+        class="control-chip sub-chip"
+        classList={{ live: running() > 0 }}
+        title={`Subagents of this chat: ${running()} of ${props.agents.length} running`}
+        onClick={() => setOpen(!open())}
+      >
+        <span class="sub-chip-dot" />
+        <span>{running() === 1 ? '1 agent' : `${running()} agents`}</span>
+      </button>
+      <DropdownMenu anchor={() => btn} open={open()} onClose={() => setOpen(false)} minWidth={240} width={320} radius={12} background="var(--surface-container-high)">
+        <div class="sub-menu-head">
+          Subagents · {running()} of {props.agents.length} running
+        </div>
+        <div class="sub-menu-list">
+          <For each={props.agents}>
+            {(a) => (
+              <button
+                class="sub-menu-item"
+                title={a.subagentTypeName ? `${name(a)} · ${a.subagentTypeName}` : name(a)}
+                onClick={() => {
+                  setOpen(false);
+                  openLinkedConversation(a.id);
+                }}
+              >
+                <span class="sub-menu-dot" classList={{ live: a.isRunning }} />
+                <span class="sub-menu-text">
+                  <span class="sub-menu-name">{name(a)}</span>
+                  <span class="sub-menu-sub">{[a.subagentTypeName?.trim() || null, a.isRunning ? 'running' : 'done'].filter(Boolean).join(' · ')}</span>
+                </span>
+                <Icon name="chevron_right" size={16} class="sub-menu-go" />
+              </button>
+            )}
+          </For>
+        </div>
+      </DropdownMenu>
+    </>
+  );
+}
+
+/** The chip the subagents chip follows (the app puts it next to thinking). */
+const isThinkingChip = (c: ControlChipView) => /think/i.test(c.id) || /^(no )?thinking\b/i.test(c.label);
+
 export function ControlsStrip() {
+  const subagents = createMemo(chatSubagents);
+  const hasThinkingChip = () => state.chat.controls.some(isThinkingChip);
   const [open, setOpenId] = createSignal<string | null>(null);
   // the sheet keeps its chip while it slides away
   const [last, setLast] = createSignal<string | null>(null);
@@ -106,7 +186,7 @@ export function ControlsStrip() {
         <span>{state.chat.notice}</span>
       </div>
     </Show>
-    <Show when={state.chat.controls.length > 0}>
+    <Show when={state.chat.controls.length > 0 || subagents().length > 0}>
       <div class="controls-strip">
         <For each={state.chat.controls}>
           {(c) => {
@@ -124,6 +204,7 @@ export function ControlsStrip() {
               else if (c.kind === 'info') setControl(c.id, 'details', false);
             };
             return (
+              <>
               <button
                 class="control-chip"
                 classList={{ hl: highlighted(), info: c.kind === 'info' }}
@@ -137,9 +218,17 @@ export function ControlsStrip() {
                 </Show>
                 <span>{c.label}</span>
               </button>
+              <Show when={isThinkingChip(c) && subagents().length}>
+                <SubagentsChip agents={subagents()} />
+              </Show>
+              </>
             );
           }}
         </For>
+        {/* no thinking chip (other agents): at the end */}
+        <Show when={!hasThinkingChip() && subagents().length}>
+          <SubagentsChip agents={subagents()} />
+        </Show>
       </div>
       <BottomSheet open={!!open() && !!chip()} onClose={() => setOpen(null)} class="picker-sheet">
         <Show when={chip()}>

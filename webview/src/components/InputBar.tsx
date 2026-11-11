@@ -28,6 +28,8 @@ import { quotaPillWindow } from '../theme';
 import { openAgentSettings, openSettings, setThemePanelOpen } from '../state/settings';
 
 export const [modelSheetOpen, setModelSheetOpen] = createSignal(false);
+/** The composer's model pill: the model picker opens above it. */
+export const [modelPillEl, setModelPillEl] = createSignal<HTMLElement | null>(null);
 
 // ------------------------------------------------------------------------------------------------ popups state
 
@@ -504,7 +506,13 @@ export function InputBar() {
               <Icon name="add" size={19} />
             </button>
             <div class="model-pill-wrap">
-              <button class="model-pill" onClick={() => setModelSheetOpen(true)} title="Switch Model">
+              <button
+                ref={setModelPillEl}
+                class="model-pill"
+                classList={{ open: modelSheetOpen() }}
+                onClick={() => setModelSheetOpen(!modelSheetOpen())}
+                title="Switch Model"
+              >
                 <Icon name="auto_awesome" size={13} color={familyColor()} />
                 <span class="model-pill-name">{modelName()}</span>
                 <Show when={quota()}>

@@ -570,7 +570,7 @@ export function pickAttachments(cb: (a: ChatAttachment[]) => void) {
  * An address the chat can frame / play, from the host's local preview server: an Interactive App's HTML, an app's
  * .html file, a local video or a YouTube id. Rejects with the reason when it cannot be served.
  */
-export function mediaUrl(kind: 'html' | 'htmlFile' | 'file' | 'youtube', value: string, start?: number): Promise<string> {
+export function mediaUrl(kind: 'html' | 'htmlFile' | 'file' | 'player' | 'youtube', value: string, start?: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const reqId = uuid();
     listeners.media.set(reqId, (r) => (r.url ? resolve(r.url) : reject(new Error(r.error || 'Cannot show it here'))));

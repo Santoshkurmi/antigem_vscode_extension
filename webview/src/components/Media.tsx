@@ -578,18 +578,23 @@ export function VideoLinkCard(props: { url: string; title?: string | null; thumb
   // the app's caption is the alt text only; with no title and no picture the card would say nothing, so it shows the
   // file name there instead
   const caption = () => props.title?.trim() || (props.thumbnail?.trim() ? '' : fileNameOf(props.url));
-  // the player, once started: a local file streams from the host's preview server, a web video plays as it is
+  // the player, once started: a web video plays here as it is; a local file plays in a player page of the host's
+  // preview server (inside VS Code the webview cannot stream it itself: its service worker re-fetches every request
+  // to 127.0.0.1, and a <video> rejects those re-fetched byte ranges)
   const [src, setSrc] = createSignal<string | null>(null);
+  const [frame, setFrame] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal(false);
   createComputed(
     on(
       () => props.url,
       () => {
         setSrc(null);
+        setFrame(null);
         setFailed(false);
       },
     ),
   );
+  const playing = () => src() ?? frame();
   const openOutside = () => {
     const m = classify(props.url);
     if (!m) return;
@@ -606,10 +611,20 @@ export function VideoLinkCard(props: { url: string; title?: string | null; thumb
       else openOutside();
       return;
     }
-    mediaUrl('file', m.ref).then(setSrc, openOutside);
+    mediaUrl('player', m.ref).then(setFrame, openOutside);
   };
   return (
     <div class="vl">
+      <Show when={frame()} keyed>
+        {(u) => (
+          <div class="vl-box playing">
+            <iframe class="vl-frame" src={u} title={props.title?.trim() || fileNameOf(props.url)} allow="autoplay; fullscreen; picture-in-picture" allowfullscreen />
+            <button class="vl-out" title="Open in VS Code" onClick={openOutside}>
+              <Icon name="open_in_new" size={15} color="#fff" />
+            </button>
+          </div>
+        )}
+      </Show>
       <Show when={src()} keyed>
         {(u) => (
           <div class="vl-box playing">
@@ -633,7 +648,7 @@ export function VideoLinkCard(props: { url: string; title?: string | null; thumb
         )}
       </Show>
       <div
-        classList={{ hidden: !!src() }}
+        classList={{ hidden: !!playing() }}
         class="vl-box"
         role="button"
         tabIndex={0}

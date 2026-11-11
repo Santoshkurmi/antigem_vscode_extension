@@ -43,6 +43,11 @@ export interface Platform {
   powerOff(): Promise<void>;
   powerOn(): void;
   isOff(): boolean;
+  /**
+   * The enabled agents changed (saved already): restart a running bridge started for other agents. [firstChoice]: the
+   * first-run picker (nothing to ask). False = the user kept the old agents.
+   */
+  applyAgents?(firstChoice: boolean): Promise<boolean>;
   /** Shows the host log (VS Code output channel); absent in dev. */
   showLogs?(): void;
   bridgeInfo(): { port: number; hubPort: number; logFile: string };
@@ -325,11 +330,14 @@ export class AppHost {
 
   private static ALL: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'];
 
-  /** Agents switched on in Settings → Agents (default: every agent the extension has). */
+  /**
+   * Agents switched on in Settings → Agents. None until the first-run picker saved a choice: nothing starts (no
+   * bridge, no agent CLI) before the user said which agents to use.
+   */
   private enabledKinds(): AgentKind[] {
     const saved = this.store.get<AgentKind[]>('agents.enabled');
-    const registered = AppHost.ALL.filter((k) => this.backends[k]);
-    return saved ? registered.filter((k) => saved.includes(k)) : registered;
+    if (!saved) return [];
+    return AppHost.ALL.filter((k) => this.backends[k] && saved.includes(k));
   }
 
   private isEnabled(kind: AgentKind): boolean {
@@ -341,14 +349,25 @@ export class AppHost {
     return this.enabledKinds().map((k) => this.backends[k]!).filter(Boolean);
   }
 
-  private setEnabled(kinds: AgentKind[]) {
+  /** Returns false when the user kept the old agents (declined the bridge restart the change needs). */
+  private async setEnabled(kinds: AgentKind[]): Promise<boolean> {
     const next = AppHost.ALL.filter((k) => kinds.includes(k) && this.backends[k]);
     if (!next.length) throw new Error('Keep at least one agent enabled');
+    const before = this.store.get<AgentKind[]>('agents.enabled');
     this.store.set('agents.enabled', next);
+    // the bridge runs only the enabled agents (--no-hub, --no-claude…): a running one is restarted for the new set
+    if (!(await (this.platform.applyAgents?.(before === undefined) ?? Promise.resolve(true)))) {
+      this.store.set('agents.enabled', before);
+      return false;
+    }
     for (const k of next) this.backends[k]?.start();
+    for (const b of this.active()) b.retry();
+    // a new-chat screen on an agent that is now off (the first-run choice, or one turned off) moves to an enabled one
+    for (const v of this.views.values()) if (!v.conversationId && !next.includes(v.agent)) this.show(v, null, this.defaultAgent());
     this.broadcast({ type: 'agents', agents: this.agentStatuses() });
     this.broadcast({ type: 'conversations', conversations: this.allConversations() });
     for (const b of this.active()) this.broadcast({ type: 'models', state: b.models() });
+    return true;
   }
 
   /** Agent of a new chat: the one picked last (remembered), if still enabled, else the first enabled one. */
@@ -935,7 +954,7 @@ export class AppHost {
           return;
         }
         if (msg.id === 'agents.enabled') {
-          this.setEnabled(Array.isArray(msg.value) ? (msg.value as AgentKind[]) : []);
+          if (!(await this.setEnabled(Array.isArray(msg.value) ? (msg.value as AgentKind[]) : []))) this.toast(v, 'info', 'Agents unchanged');
           this.refreshSettings();
           return;
         }
@@ -1051,7 +1070,9 @@ export class AppHost {
                 ? srv.htmlFile(msg.value)
                 : msg.kind === 'file'
                   ? srv.file(msg.value)
-                  : srv.youtube(msg.value, msg.start ?? 0);
+                  : msg.kind === 'player'
+                    ? srv.player(msg.value)
+                    : srv.youtube(msg.value, msg.start ?? 0);
         } catch (e) {
           error = e instanceof Error ? (/ENOENT/.test(e.message) ? 'File not found' : e.message) : String(e);
         }

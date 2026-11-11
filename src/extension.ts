@@ -7,7 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { AppHost, type Platform, type ViewPort } from './core/host';
-import { BridgeManager, cliPathArgs } from './core/bridge/BridgeManager';
+import { agentFlags, BridgeManager, cliPathArgs } from './core/bridge/BridgeManager';
 import { McpHost } from './core/mcp/server';
 import { NotesStore, notesMcp } from './core/mcp/notes';
 import { themeMcp } from './core/mcp/theme';
@@ -164,6 +164,8 @@ export function activate(context: vscode.ExtensionContext) {
     hubPort: cfg().get<number>('hubPort', 1245),
     workspaceDir: homeDir(),
     extraArgs: () => cliPathArgs(kv.get('cli.paths')),
+    agentFlags: () => agentFlags(kv.get<string[]>('agents.enabled')),
+    launchedFlags: { get: () => kv.get<string>('bridge.agentFlags'), set: (f) => kv.set('bridge.agentFlags', f) },
     agyDataDir: () => kv.get<string>('agy.dataDir') ?? 'antigravity-ide',
     logFile: path.join(context.globalStorageUri.fsPath, 'bridge.log'),
     log,
@@ -261,6 +263,24 @@ export function activate(context: vscode.ExtensionContext) {
       await bridge.shutdown();
       await new Promise((r) => setTimeout(r, 800));
       await bridge.ensureRunning();
+    },
+    applyAgents: async (firstChoice) => {
+      if (bridge.state !== 'running' || !bridge.agentFlagsChanged()) return true;
+      if (
+        !firstChoice &&
+        (await vscode.window.showWarningMessage(
+          'Restart the AntiGem bridge to apply the agents? Running chats stop in every VS Code window.',
+          { modal: true },
+          'Restart bridge',
+        )) !== 'Restart bridge'
+      )
+        return false;
+      log('[bridge] restarting for the enabled agents');
+      bridge.resume();
+      await bridge.shutdown();
+      await new Promise((r) => setTimeout(r, 800));
+      await bridge.ensureRunning();
+      return true;
     },
     showLogs: () => output.show(),
     bridgeInfo: () => ({ port: bridge.opts.port, hubPort: bridge.opts.hubPort, logFile: bridge.opts.logFile }),

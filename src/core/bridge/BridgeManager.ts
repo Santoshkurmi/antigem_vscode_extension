@@ -17,6 +17,13 @@ export interface BridgeOptions {
   extraArgs?: () => string[];
   /** agy history folder under ~/.gemini the hub must use (a running bridge using another one is restarted). */
   agyDataDir?: () => string;
+  /**
+   * The agents the bridge must leave off (the app's AgentPreferences.bridgeFlags: --no-hub, --no-claude…), and where
+   * the flags of the bridge started last are kept (shared by every window): a running bridge started with other
+   * flags is replaced.
+   */
+  agentFlags?: () => string[];
+  launchedFlags?: { get(): string | undefined; set(flags: string): void };
   logFile: string;
   log: (line: string) => void;
 }
@@ -106,6 +113,19 @@ export class BridgeManager {
     }
   }
 
+  private wantedFlags(): string {
+    return (this.opts.agentFlags?.() ?? []).join(' ');
+  }
+
+  /**
+   * The running bridge was started for other agents than the ones enabled now (a bridge from before this was kept,
+   * with no record, ran every agent).
+   */
+  agentFlagsChanged(): boolean {
+    if (!this.opts.agentFlags) return false;
+    return (this.opts.launchedFlags?.get() ?? '') !== this.wantedFlags();
+  }
+
   /** Turned off by the user (drawer ⏻): nothing starts the bridge again until resume(). */
   suspended = false;
 
@@ -141,12 +161,14 @@ export class BridgeManager {
         } catch {
           /* keep default */
         }
-        if (!want || want === have) {
+        const agentsOk = !this.agentFlagsChanged();
+        if ((!want || want === have) && agentsOk) {
           this.state = 'running';
           this.opts.log(`[bridge] reusing bridge on ${this.baseUrl}`);
           return;
         }
-        this.opts.log(`[bridge] the running bridge uses ~/.gemini/${have}; restarting it with ~/.gemini/${want}`);
+        if (!agentsOk) this.opts.log(`[bridge] the running bridge runs other agents; restarting it with ${this.wantedFlags() || 'every agent'}`);
+        else this.opts.log(`[bridge] the running bridge uses ~/.gemini/${have}; restarting it with ~/.gemini/${want}`);
         await this.shutdown();
         for (let i = 0; i < 30 && (await this.healthy()); i++) await new Promise((r) => setTimeout(r, 200));
         this.state = 'starting';
@@ -177,6 +199,9 @@ export class BridgeManager {
     const dataDir = this.opts.agyDataDir?.();
     if (dataDir) args.push('--agy-data-dir', dataDir);
     args.push(...(this.opts.extraArgs?.() ?? []));
+    const agentFlags = this.opts.agentFlags?.() ?? [];
+    args.push(...agentFlags);
+    this.opts.launchedFlags?.set(agentFlags.join(' '));
     fs.mkdirSync(path.dirname(this.opts.logFile), { recursive: true });
     const out = fs.openSync(this.opts.logFile, 'a');
     this.opts.log(`[bridge] starting ${this.opts.binPath} ${args.join(' ')}`);
@@ -227,6 +252,17 @@ export class BridgeManager {
 }
 
 /** Bridge flags for the CLI paths set in Settings → Agents → CLI locations. */
+/** Bridge flags that keep a disabled agent from running at all (AgentPreferences.bridgeFlags); none chosen yet = none runs. */
+export function agentFlags(enabled: string[] | undefined): string[] {
+  const on = enabled ?? [];
+  const out: string[] = [];
+  if (!on.includes('AGY')) out.push('--no-hub');
+  if (!on.includes('CLAUDE')) out.push('--no-claude');
+  if (!on.includes('OPENCODE')) out.push('--no-opencode');
+  if (!on.includes('CODEX')) out.push('--no-codex');
+  return out;
+}
+
 export function cliPathArgs(paths: Partial<Record<'AGY' | 'CLAUDE' | 'CODEX' | 'OPENCODE', string>> | undefined): string[] {
   const p = paths ?? {};
   const out: string[] = [];

@@ -2,6 +2,9 @@
 // only load files from the extension folder):
 //   /p/<id>/…   an Interactive App block (```html_app): the AI's HTML, or a .html file on disk with the files next to it
 //   /f/<id>/…   a local video / audio file the chat shows (with Range support, so the player can seek)
+//   /v/<id>/…   a player page for that file: VS Code's webview service worker re-fetches every request the webview
+//               makes to 127.0.0.1 and a <video> rejects such re-fetched byte ranges, so the chat plays local
+//               media in this page (a frame's own requests never pass through that worker)
 //   /yt/<id>    a YouTube embed (YouTube refuses to play inside a page that sends no referrer, like a webview)
 // It listens on 127.0.0.1 only. Every page and file has a random, unguessable id the host hands to its own webview;
 // nothing else is served. Apps run sandboxed (CSP `sandbox`) but keep this server's origin, so localStorage,
@@ -69,6 +72,18 @@ const ytPage = (id: string, start: number) => `<!doctype html><html><head><meta 
 <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%}</style></head><body>
 <iframe src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&playsinline=1&rel=0${start > 0 ? `&start=${start}` : ''}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
 </body></html>`;
+
+/** A bare player for one file: fills the frame, native controls, says so when the file cannot play. */
+const playerPage = (src: string, audio: boolean) => `<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,sans-serif}
+${audio ? 'body{display:flex;align-items:center;padding:0 12px}audio{width:100%}' : 'video{display:block;width:100%;height:100%;object-fit:contain;background:#000}'}
+#err{display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:#ddd;font-size:13px;text-align:center;padding:16px}</style></head>
+<body><${audio ? 'audio' : 'video'} id="m" src="${src}" controls autoplay playsinline preload="metadata"></${audio ? 'audio' : 'video'}>
+<div id="err"></div>
+<script>
+const m = document.getElementById('m');
+m.addEventListener('error', () => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = 'This file cannot play here' + (m.error && m.error.message ? ' (' + m.error.message + ')' : '') + '.'; m.style.display = 'none'; });
+</script></body></html>`;
 
 export class PreviewServer {
   private server: http.Server | null = null;
@@ -161,6 +176,11 @@ export class PreviewServer {
     return `${this.base}/f/${this.put({ kind: 'file', file: abs, at: Date.now() })}/${name}`;
   }
 
+  /** The player page of a local video / audio file (see /v/ above). */
+  player(file: string): string {
+    return this.file(file).replace(`${this.base}/f/`, `${this.base}/v/`);
+  }
+
   youtube(videoId: string, start = 0): string {
     if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) throw new Error('Not a YouTube video id');
     return `${this.base}/yt/${videoId}${start > 0 ? `?t=${Math.floor(start)}` : ''}`;
@@ -208,6 +228,10 @@ export class PreviewServer {
         return this.stream(req, res, file, /\.html?$/i.test(file) ? APP_CSP : null);
       }
       if (kind === 'f' && e.kind === 'file') return this.stream(req, res, e.file, null);
+      if (kind === 'v' && e.kind === 'file') {
+        const audio = /\.(mp3|wav|ogg|m4a|flac)$/i.test(e.file);
+        return this.send(res, 200, playerPage(`/f/${id}/${encodeURIComponent(path.basename(e.file))}`, audio), 'text/html; charset=utf-8', req.method === 'HEAD');
+      }
       return this.fail(res, 404);
     } catch (err) {
       this.log(`[preview] ${err instanceof Error ? err.message : String(err)}`);
