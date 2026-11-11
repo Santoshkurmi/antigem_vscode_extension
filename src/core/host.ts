@@ -15,6 +15,7 @@ import type { BrowserHooks } from './browser/settings';
 import type { PluginHooks } from './plugins/types';
 import { selectionBlock } from './text';
 import type { PreviewServer } from './preview/server';
+import type { PhoneAccess } from './phone';
 import type { AgentBackend, ChatState, KeyValueStore, Logger } from './types';
 
 /** What the embedding environment (VS Code or the dev server) provides. */
@@ -246,6 +247,18 @@ export class AppHost {
 
   private browser: BrowserHooks | null = null;
 
+  // ------------------------------------------------------------------ Connect phone (src/core/phone)
+
+  private phone: PhoneAccess | null = null;
+
+  /** Settings → Connect phone (page 'phone'): the AntiGem app on a phone uses this PC's agents. */
+  attachPhone(p: PhoneAccess) {
+    this.phone = p;
+    p.onChange(() => {
+      for (const v of this.views.values()) if (v.settingsPage === 'root' || v.settingsPage === 'phone') void this.postSettings(v);
+    });
+  }
+
   /** Settings → Browser (pages 'browser*'); its status changes refresh the pages that show it. */
   attachBrowser(b: BrowserHooks) {
     this.browser = b;
@@ -468,7 +481,14 @@ export class AppHost {
         ...(this.browser ? [{ id: 'browser', title: '', items: [this.browser.rootItem()] } satisfies SettingsSection] : []),
         ...(this.plugins ? [{ id: 'plugins', title: '', items: [this.plugins.settings.rootItem()] } satisfies SettingsSection] : []),
         ...(this.jarvis ? [{ id: 'jarvis', title: '', items: [this.jarvis.settings.rootItem()] } satisfies SettingsSection] : []),
-        { id: 'system', title: '', items: [{ kind: 'page', id: 'connection', label: 'Bridge & connection', icon: 'lan', description: `127.0.0.1:${this.platform.bridgeInfo().port}` }] },
+        {
+          id: 'system',
+          title: '',
+          items: [
+            { kind: 'page', id: 'connection', label: 'Bridge & connection', icon: 'lan', description: `127.0.0.1:${this.platform.bridgeInfo().port}` },
+            ...(this.phone ? [this.phone.rootItem()] : []),
+          ],
+        },
       ];
       return { id: 'root', title: 'Settings', sections };
     }
@@ -510,6 +530,7 @@ export class AppHost {
     }
     if (this.jarvis && (page === 'jarvis' || page.startsWith('jarvis.'))) return this.jarvis.settings.page(page);
     if (this.browser && (page === 'browser' || page.startsWith('browser.'))) return this.browser.page(page);
+    if (this.phone && page === 'phone') return this.phone.page(page);
     if (this.plugins && (page === 'plugins' || page.startsWith('plugins.'))) return this.plugins.settings.page(page);
     const own = this.settings.page(page);
     if (own) return own;
@@ -967,6 +988,11 @@ export class AppHost {
         v.settingsPage = null;
         return;
       case 'settingChange': {
+        if (this.phone && msg.page === 'phone') {
+          await this.phone.change(msg.page, msg.id, msg.value);
+          this.refreshSettings();
+          return;
+        }
         if (this.browser && (msg.page === 'browser' || msg.page.startsWith('browser.'))) {
           await this.browser.change(msg.page, msg.id, msg.value);
           this.refreshSettings();
@@ -1046,6 +1072,8 @@ export class AppHost {
           result = await this.notifier.test();
         } else if (this.jarvis && (msg.page === 'jarvis' || msg.page.startsWith('jarvis.'))) {
           result = await this.jarvis.settings.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
+        } else if (this.phone && msg.page === 'phone') {
+          result = await this.phone.action(msg.page, msg.id, msg.rowId, msg.actionId);
         } else if (this.browser && (msg.page === 'browser' || msg.page.startsWith('browser.'))) {
           result = await this.browser.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
         } else if (this.plugins && (msg.page === 'plugins' || msg.page.startsWith('plugins.'))) {
@@ -1320,6 +1348,7 @@ export class AppHost {
 
   dispose() {
     this.notifier.dispose();
+    this.phone?.dispose();
     for (const v of this.views.values()) v.unsubscribe?.();
     this.views.clear();
     this.jarvis?.dispose();

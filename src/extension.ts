@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { AppHost, type Platform, type ViewPort } from './core/host';
+import { PhoneAccess } from './core/phone';
 import { agentFlags, BridgeManager, cliPathArgs } from './core/bridge/BridgeManager';
 import { McpHost } from './core/mcp/server';
 import { NotesStore, notesMcp } from './core/mcp/notes';
@@ -500,6 +501,19 @@ export function activate(context: vscode.ExtensionContext) {
       copy: platform.copy,
       log,
       mcpPort: mcp.port,
+    }),
+  );
+  // Settings → Connect phone: the AntiGem app on a phone uses this PC's agents (pairs over the Wi-Fi, then SSH)
+  host.attachPhone(
+    new PhoneAccess({
+      store: kv,
+      log,
+      ports: () => ({ bridge: bridge.opts.port, hub: bridge.opts.hubPort }),
+      restartBridge: async () => {
+        await bridge.restart();
+        host?.reconnect();
+      },
+      confirm: platform.confirm,
     }),
   );
   setPresetEnv({ port: mcp.port, deviceId, served: (p) => mcp.serves(p) });

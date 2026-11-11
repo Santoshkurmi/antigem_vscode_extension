@@ -280,6 +280,7 @@ const KNOWN_ICONS = new Set([
   'download', 'upload', 'edit_note', 'rule', 'policy', 'lock', 'model', 'forum', 'chat', 'cloud_sync', 'extension',
   'auto_awesome', 'code', 'smart_toy', 'cloud', 'rocket', 'language', 'public', 'notifications', 'schedule', 'layers',
   'settings', 'search', 'image', 'terminal_o', 'info_o', 'folder_o', 'build_o', 'description_o', 'edit_o', 'chat_bubble', 'lan',
+  'phone_android',
 ]);
 
 const toneColor = (tone: string | null | undefined) =>
