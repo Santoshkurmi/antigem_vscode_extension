@@ -11,6 +11,7 @@ import type { AiModel, ChatAttachment, ChatMessage, Conversation } from '../../.
 import type { AgentStatus, ApprovalView, ControlChipView, ModelsState, QuestionView, SlashCommandView } from '../../../shared/protocol';
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { attachedFilesBlock, cleanTitle, collapseExpansions } from '../text';
+import { absPath, baseName, pathToUri } from '../paths';
 import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest } from '../types';
 import { OpenCodeClient, OpenCodeUnavailableError, type OpenCodeStatus } from './client';
 import {
@@ -796,7 +797,7 @@ export class OpenCodeBackend implements AgentBackend {
       hasActivity: false,
       runStatus: isRunning ? 'RUNNING' : 'IDLE',
       stepCount: 0,
-      workspaceUri: dir ? `file://${dir}` : '',
+      workspaceUri: dir ? pathToUri(dir) : '',
       parentConversationId: str(s, 'parentID') ?? null,
       nestingDepth: 0,
       agent: 'OPENCODE',
@@ -980,7 +981,7 @@ export class OpenCodeBackend implements AgentBackend {
     if (!text.trim() && !files.length) return;
     const ses = s.id;
     const onServer = this.isServerSession(ses);
-    const workspaceUri = req.workspaceUri ? (req.workspaceUri.startsWith('file://') ? req.workspaceUri : `file://${req.workspaceUri}`) : '';
+    const workspaceUri = req.workspaceUri ? pathToUri(req.workspaceUri) : '';
     if (!onServer) {
       // a new chat: listed at once (OpenCode lists it once created)
       s.model = req.modelId ?? this.models().selectedId;
@@ -1020,11 +1021,11 @@ export class OpenCodeBackend implements AgentBackend {
     s.emitNow();
 
     if (!onServer) {
-      const dir = workspaceUri.replace(/^file:\/\//, '');
+      const dir = absPath(workspaceUri);
       const ref = modelRefJson(s.model);
       const perms = rules(this.prefMode(), s.agent);
       const body: Record<string, unknown> = { id: ses };
-      if (dir.startsWith('/')) body.location = { directory: decodeURIComponent(dir) };
+      if (dir) body.location = { directory: dir };
       if (ref) body.model = ref;
       if (s.agent && s.agent !== 'build') body.agent = s.agent;
       if (perms) body.permissions = perms;
@@ -1382,7 +1383,7 @@ export class OpenCodeBackend implements AgentBackend {
     this.titleChecked.add(s.id);
     const raw = prompts[0];
     const typed = cleanTitle(raw).trim();
-    const files = [...raw.matchAll(/^- `(.+)` \(/gm)].map((m) => m[1].split('/').pop());
+    const files = [...raw.matchAll(/^- `(.+)` \(/gm)].map((m) => baseName(m[1]));
     const subject = [typed, files.length ? `Attached files: ${files.join(', ')}` : ''].filter(Boolean).join('\n').slice(0, 900);
     if (!subject) return;
     const ses = s.id;

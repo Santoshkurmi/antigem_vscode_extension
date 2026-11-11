@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"gemini-server/pkg/hub"
+	"gemini-server/pkg/procgroup"
 )
 
 // Installing and inspecting the Antigravity CLI (`agy`) on the machine the bridge runs on, so the app can offer
@@ -99,6 +101,7 @@ func agyVersion(bin string) string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "--version")
 	cmd.Stdin = nil
+	procgroup.HideConsole(cmd)
 	// stdout only: agy logs to stderr before it is set up (on Android "ERROR: logging before google.Init: I… Initialized
 	// Android local timezone…"), which is not an error and not the version
 	out, _ := cmd.Output()
@@ -149,6 +152,11 @@ func (h *Handler) AgyCliHandler(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AgyCliInstallHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{"success": false, "error": "POST only"})
+		return
+	}
+	if runtime.GOOS == "windows" {
+		// the official installer is a bash script (and bash.exe on Windows is usually WSL's, a different machine)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": false, "error": "Installing agy from the app is not supported on Windows: install the Antigravity CLI from https://antigravity.google, then restart the server."})
 		return
 	}
 	cmd := exec.Command("bash", "-lc", agyInstallCommand)
@@ -226,6 +234,7 @@ func (h *Handler) runAgyJob(w http.ResponseWriter, kind string, cmd *exec.Cmd, d
 	cmd.Env = os.Environ()
 	cmd.Stdout = job
 	cmd.Stderr = job
+	procgroup.HideConsole(cmd)
 	if err := cmd.Start(); err != nil {
 		job.mu.Lock()
 		code := 1

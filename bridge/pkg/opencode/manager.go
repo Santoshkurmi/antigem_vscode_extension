@@ -100,6 +100,10 @@ func (m *Manager) ResolveBinary() (string, error) {
 		"/usr/local/bin/opencode",
 		"/usr/bin/opencode",
 	)
+	if runtime.GOOS == "darwin" {
+		// Homebrew on Apple silicon; an editor started from the Dock often has it missing from PATH
+		candidates = append(candidates, "/opt/homebrew/bin/opencode")
+	}
 	for _, c := range candidates {
 		if !strings.Contains(c, "/") {
 			if p, err := exec.LookPath(c); err == nil {
@@ -178,6 +182,7 @@ func (m *Manager) command(ctx context.Context, bin string, args ...string) (*exe
 		env = append(env, "TMPDIR="+filepath.Join(prefix, "tmp"))
 	}
 	cmd.Env = env
+	procgroup.HideConsole(cmd)
 	return cmd, nil
 }
 

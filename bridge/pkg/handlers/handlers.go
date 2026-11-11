@@ -28,6 +28,7 @@ import (
 	"gemini-server/pkg/config"
 	"gemini-server/pkg/hub"
 	"gemini-server/pkg/models"
+	"gemini-server/pkg/procgroup"
 	"gemini-server/pkg/scanner"
 	"gemini-server/pkg/transcript"
 )
@@ -1625,6 +1626,21 @@ func copyRecursive(src, dst string) error {
 	return os.WriteFile(dst, data, 0644)
 }
 
+// rgText is ripgrep's JSON text: {"text": …}, or {"bytes": base64} when it is not valid UTF-8.
+type rgText struct {
+	Text  string `json:"text"`
+	Bytes string `json:"bytes"`
+}
+
+func (t rgText) String() string {
+	if t.Text == "" && t.Bytes != "" {
+		if b, err := base64.StdEncoding.DecodeString(t.Bytes); err == nil {
+			return string(b)
+		}
+	}
+	return t.Text
+}
+
 func (h *Handler) FileSearchHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	dir := r.URL.Query().Get("dir")
@@ -1632,22 +1648,30 @@ func (h *Handler) FileSearchHandler(w http.ResponseWriter, r *http.Request) {
 		dir = h.Cfg.ProjectsBaseDir
 	}
 
-	cmd := exec.Command("rg", "-n", "--no-heading", query, dir)
+	// --json: a path:line:text split breaks on Windows paths (C:\…) and file names with ':'; "--" keeps a query
+	// that starts with '-' from being read as a flag
+	cmd := exec.Command("rg", "--json", "--", query, dir)
+	procgroup.HideConsole(cmd)
 	output, _ := cmd.Output()
 
 	var matches []models.SearchMatch
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) == 3 {
-			lineNum := 0
-			fmt.Sscanf(parts[1], "%d", &lineNum)
-			matches = append(matches, models.SearchMatch{
-				Path:       parts[0],
-				LineNumber: lineNum,
-				LineText:   strings.TrimSpace(parts[2]),
-			})
+	for _, line := range bytes.Split(output, []byte("\n")) {
+		var ev struct {
+			Type string `json:"type"`
+			Data struct {
+				Path       rgText `json:"path"`
+				Lines      rgText `json:"lines"`
+				LineNumber int    `json:"line_number"`
+			} `json:"data"`
 		}
+		if json.Unmarshal(line, &ev) != nil || ev.Type != "match" {
+			continue
+		}
+		matches = append(matches, models.SearchMatch{
+			Path:       ev.Data.Path.String(),
+			LineNumber: ev.Data.LineNumber,
+			LineText:   strings.TrimSpace(ev.Data.Lines.String()),
+		})
 	}
 
 	if matches == nil {

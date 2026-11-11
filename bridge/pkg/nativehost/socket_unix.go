@@ -5,6 +5,7 @@ package nativehost
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ func ownedSocket(path string) error {
 }
 
 // Dial connects to the first candidate that answers.
-func Dial(paths []string) (net.Conn, string, error) {
+func Dial(paths []string) (io.ReadWriteCloser, string, error) {
 	var last error = errors.New("no socket path")
 	for _, p := range paths {
 		if err := ownedSocket(p); err != nil {

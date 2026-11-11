@@ -5,9 +5,9 @@ import { themeMode } from '../theme';
 
 const PATTERN = new RegExp(
   [
-    String.raw`(\[(.*?)\]\(((?:https?|file|conversation)://[^\s)]+|/[^\s)]+|(?![a-z][a-z0-9+.-]*:)[\w.@~-][^\s()]*)\))`, // 1: [text](url) (+ relative file paths)
-    String.raw`(<a\s+href=["']((?:https?|file|conversation)://[^"']+|/[^"']+)["']\s*>(.*?)</a>)`, // 4: <a href>
-    String.raw`(file:///[a-zA-Z0-9_./\-#]+)`, // 7: bare file link
+    String.raw`(\[(.*?)\]\(((?:https?|file|conversation)://[^\s)]+|/[^\s)]+|[A-Za-z]:[\\/][^\s)]+|(?![a-z][a-z0-9+.-]*:)[\w.@~-][^\s()]*)\))`, // 1: [text](url) (+ Windows and relative file paths)
+    String.raw`(<a\s+href=["']((?:https?|file|conversation)://[^"']+|/[^"']+|[A-Za-z]:[\\/][^"']+)["']\s*>(.*?)</a>)`, // 4: <a href>
+    String.raw`(file:///(?:[a-zA-Z]:)?[a-zA-Z0-9_./\-#%]+)`, // 7: bare file link (file:///C:/… on Windows)
     String.raw`(conversation://[a-zA-Z0-9_./\-#]+)`, // 8: bare conversation link
     String.raw`(` + '`' + String.raw`([^` + '`' + String.raw`\n]+)` + '`' + `)`, // 9: `code`
     String.raw`(<code>(.*?)</code>)`, // 11
@@ -41,10 +41,18 @@ export function esc(s: string): string {
 }
 
 function baseName(p: string): string {
-  const clean = p.replace(/\/+$/, '');
-  const i = clean.lastIndexOf('/');
-  return i >= 0 ? clean.substring(i + 1) || clean : clean;
+  const clean = p.replace(/[\\/]+$/, '');
+  const i = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+  const name = i >= 0 ? clean.substring(i + 1) || clean : clean;
+  try {
+    return decodeURIComponent(name); // `my%20file.ts` from a link
+  } catch {
+    return name;
+  }
 }
+
+/** An absolute Windows path (`C:\x`, `c:/x`). */
+const isDrivePath = (s: string) => /^[A-Za-z]:[\\/]/.test(s);
 
 /** "#rgb", "#rrggbb", "#aarrggbb", "0xAARRGGBB", "rgb(…)" → a CSS color, or null (the app's parseHexOrRgbColor). */
 export function parseColor(str: string): string | null {
@@ -71,6 +79,7 @@ function looksLikePath(s: string): boolean {
   if (s.length > 300 || /\s/.test(s)) return false;
   if (/^(https?:)?\/\//.test(s)) return false;
   if (s.startsWith('/') || s.startsWith('./') || s.startsWith('~/')) return /[A-Za-z0-9]/.test(s);
+  if (isDrivePath(s)) return /[A-Za-z0-9]/.test(s.slice(3));
   return /^[\w.@-][\w./@-]*\.[A-Za-z0-9]{1,8}(:\d+)?$/.test(s) && !/^\d+(\.\d+)+$/.test(s);
 }
 
@@ -89,6 +98,8 @@ function fileAttrs(target: string): string {
   } catch {
     /* keep raw */
   }
+  // file:///C:/x → C:/x
+  if (/^\/[A-Za-z]:[\\/]/.test(path)) path = path.slice(1);
   return ` data-file="${esc(path)}"${line ? ` data-line="${line}"` : ''}`;
 }
 
@@ -101,7 +112,7 @@ function linkHtml(title: string, url: string, depth: number): string {
   const isWeb = /^https?:\/\//i.test(url);
   if (!isWeb) {
     const clean = url.replace(/^file:\/\//i, '').split('#')[0];
-    const label = !title.trim() || /^file:\/\//i.test(title) || title.startsWith('/') ? baseName(clean) : title;
+    const label = !title.trim() || /^file:\/\//i.test(title) || title.startsWith('/') || isDrivePath(title) ? baseName(clean) : title;
     return `<span class="md-file"${fileAttrs(url)}> ${esc(label)} </span>`;
   }
   return `<a class="md-link" data-url="${esc(url)}" href="${esc(url)}">${depth < 3 ? render(title, depth + 1) : esc(title)}</a>`;

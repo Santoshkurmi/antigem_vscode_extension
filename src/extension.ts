@@ -68,6 +68,18 @@ function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
   }
 }
 
+/**
+ * The bridge program for this computer. Windows on ARM has no build of its own: it runs the x64 one (Windows
+ * emulates it).
+ */
+function bridgeBinary(extPath: string): string {
+  const exe = process.platform === 'win32' ? '.exe' : '';
+  const file = (arch: string) => path.join(extPath, 'bin', `antigem-bridge-${process.platform}-${arch}${exe}`);
+  const own = file(process.arch);
+  if (process.platform === 'win32' && process.arch === 'arm64' && !fs.existsSync(own)) return file('x64');
+  return own;
+}
+
 function connectWebview(
   webview: vscode.Webview,
   kind: ViewPort['kind'],
@@ -157,7 +169,10 @@ export function activate(context: vscode.ExtensionContext) {
   const openFromNotification = (id: string) => {
     if (!id) return;
     host?.revealChat(id);
-    // the desktop's vscode:// handler raises the VS Code window (an extension cannot focus it by itself)
+    // the desktop's vscode:// handler raises the VS Code window (an extension cannot focus it by itself). Only Linux
+    // reports clicks here: a Windows toast opens the link itself, and an AppleScript notification on macOS cannot
+    // open anything (a click there opens Script Editor)
+    if (process.platform !== 'linux') return;
     try {
       const p = spawn('xdg-open', [chatUri(id)], { stdio: 'ignore', detached: true });
       p.on('error', () => void vscode.env.openExternal(vscode.Uri.parse(chatUri(id))));
@@ -168,7 +183,7 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   const bridge = new BridgeManager({
-    binPath: path.join(context.extensionPath, 'bin', `antigem-bridge-${process.platform}-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`),
+    binPath: bridgeBinary(context.extensionPath),
     port: cfg().get<number>('bridgePort', 1244),
     hubPort: cfg().get<number>('hubPort', 1245),
     workspaceDir: homeDir(),

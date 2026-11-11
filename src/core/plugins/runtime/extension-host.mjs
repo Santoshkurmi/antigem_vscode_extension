@@ -11,6 +11,9 @@ import { createChromePolyfill } from './chrome-polyfill.mjs';
 import { BrowserAPI, matches, safeFile } from './browser-api.mjs';
 import { SKILL_TOOL_NAMES, listSkills, skillTools, callSkillTool, skillInstructions } from './skills.mjs';
 
+// Windows refuses to replace a file another program (antivirus, another window) has open for a moment: retry briefly
+function renameOver(from, to) { for (let i = 0; ; i++) { try { fs.renameSync(from, to); return; } catch (e) { if (process.platform !== 'win32' || i >= 5 || !['EPERM', 'EACCES', 'EBUSY'].includes(e?.code)) throw e; const until = Date.now() + 50 * (i + 1); while (Date.now() < until) { /* wait */ } } } }
+
 const ROOT = path.join(homedir(), 'extensions');
 const json = value => JSON.parse(JSON.stringify(value));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -25,7 +28,7 @@ export class ExtensionHost {
   recordLog(extensionId,level,args){const message=args.map(value=>{if(value?.stack)return value.stack;try{return typeof value==='string'?value:JSON.stringify(value)??String(value);}catch{return String(value);}}).join(' ').slice(0,8000);this.logs.push({extension_id:extensionId,time:Date.now(),level,message});if(this.logs.length>500)this.logs.splice(0,this.logs.length-500);}
   resourceBase(ext) { return `${this.baseUrl || `http://127.0.0.1:${this.options.hostPort}`}/extension/${ext.resourceToken}/`; }
   readState(ext) { try { return JSON.parse(fs.readFileSync(path.join(this.stateRoot, ext.id + '.json'), 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw new Error(`Cannot read extension state: ${e.message}`); return {}; } }
-  saveState(ext) { fs.mkdirSync(this.stateRoot, { recursive: true, mode: 0o700 }); const file = path.join(this.stateRoot, ext.id + '.json'); const temporary = file + '.' + randomUUID() + '.tmp'; fs.writeFileSync(temporary, JSON.stringify({ version: ext.manifest.version, local: ext.storage.local, sync: ext.storage.sync, alarms: [...ext.alarms.values()].map(a => a.info) }), { mode: 0o600 }); fs.renameSync(temporary, file); }
+  saveState(ext) { fs.mkdirSync(this.stateRoot, { recursive: true, mode: 0o700 }); const file = path.join(this.stateRoot, ext.id + '.json'); const temporary = file + '.' + randomUUID() + '.tmp'; fs.writeFileSync(temporary, JSON.stringify({ version: ext.manifest.version, local: ext.storage.local, sync: ext.storage.sync, alarms: [...ext.alarms.values()].map(a => a.info) }), { mode: 0o600 }); renameOver(temporary, file); }
   context(ext, type, extra = {}) { const ctx = { id: randomUUID(), token: randomBytes(24).toString('hex'), extension: ext, type, events: [], waiters: new Set(), ...extra }; this.contexts.set(ctx.id, ctx); return ctx; }
   send(ctx, name, args = []) {
     if (!this.contexts.has(ctx.id)) return;
@@ -177,7 +180,7 @@ export class ExtensionHost {
     if (method === 'antigem.stat') { const file = this.filePath(args.path); const s = fs.statSync(file); return { path: file, size: s.size, modified: s.mtimeMs, isFile: s.isFile() }; }
     if (method === 'antigem.readFile') { const file = this.filePath(args.path); const data = fs.readFileSync(file); return args.encoding === 'base64' ? data.toString('base64') : data.toString('utf8'); }
     if (method === 'antigem.writeFile') { const file = this.filePath(args.path); fs.mkdirSync(path.dirname(file), { recursive: true }); (args.append ? fs.appendFileSync : fs.writeFileSync)(file, args.data, args.encoding === 'base64' ? 'base64' : 'utf8'); return { path: file }; }
-    if (method === 'antigem.download') { const file = this.filePath(args.path); if (args.reuse && fs.existsSync(file) && fs.statSync(file).size) return { path: file }; const response = await fetch(args.url, { signal: AbortSignal.timeout(180000) }); if (!response.ok) throw new Error(`Download HTTP ${response.status}`); fs.mkdirSync(path.dirname(file), { recursive: true }); const temp = file + '.' + randomUUID() + '.tmp'; try { const handle = fs.createWriteStream(temp); const { pipeline } = await import('node:stream/promises'); const { Readable } = await import('node:stream'); await pipeline(Readable.fromWeb(response.body), handle); fs.renameSync(temp, file); } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); } return { path: file }; }
+    if (method === 'antigem.download') { const file = this.filePath(args.path); if (args.reuse && fs.existsSync(file) && fs.statSync(file).size) return { path: file }; const response = await fetch(args.url, { signal: AbortSignal.timeout(180000) }); if (!response.ok) throw new Error(`Download HTTP ${response.status}`); fs.mkdirSync(path.dirname(file), { recursive: true }); const temp = file + '.' + randomUUID() + '.tmp'; try { const handle = fs.createWriteStream(temp); const { pipeline } = await import('node:stream/promises'); const { Readable } = await import('node:stream'); await pipeline(Readable.fromWeb(response.body), handle); renameOver(temp, file); } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); } return { path: file }; }
     if (method === 'antigem.mediaFrame' || method === 'antigem.mediaInfo') return this.browser.bridge(method.endsWith('mediaFrame') ? 'media/frame' : 'media/info', { ...args, path: this.filePath(args.path) });
     throw new Error(`Unsupported native operation ${method}`);
   }

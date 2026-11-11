@@ -7,6 +7,7 @@ import { Portal } from 'solid-js/web';
 import { mediaUrl, readImage, send } from '../state/store';
 import { isVsCode } from '../host';
 import { Icon, IconButton, nextFrame } from '../ui/primitives';
+import { fileLinkToPath } from '../util/paths';
 
 // Material icons the app uses that ui/iconData.ts does not have (filled set, @material-design-icons/svg).
 const BROKEN_IMAGE =
@@ -26,20 +27,7 @@ function PathIcon(props: { d: string; size: number; color?: string }) {
 /** Where an image comes from: a local file (read by the host) or something the webview can load itself. */
 type MediaSource = { kind: 'local'; ref: string } | { kind: 'web'; ref: string };
 
-function localPath(p: string): string {
-  let s = p.trim();
-  if (/^file:\/\//i.test(s)) {
-    s = s.replace(/^file:\/\/(localhost)?/i, '');
-    try {
-      s = decodeURIComponent(s);
-    } catch {
-      /* keep it as written */
-    }
-    // file:///C:/x → C:/x
-    if (/^\/[a-zA-Z]:[\\/]/.test(s)) s = s.slice(1);
-  }
-  return s;
-}
+const localPath = fileLinkToPath;
 
 function classify(src?: string | null, path?: string | null): MediaSource | null {
   const p = path?.trim();
@@ -94,8 +82,8 @@ function createImageUrl(src: () => string | null | undefined, path: () => string
 }
 
 const fileNameOf = (u: string) => {
-  const clean = u.split(/[?#]/)[0].replace(/\/+$/, '');
-  const name = clean.substring(clean.lastIndexOf('/') + 1);
+  const clean = u.split(/[?#]/)[0].replace(/[\\/]+$/, '');
+  const name = clean.substring(Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\')) + 1);
   try {
     return decodeURIComponent(name);
   } catch {

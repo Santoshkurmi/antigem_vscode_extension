@@ -1047,7 +1047,7 @@ export function toolTypeFor(name: string): ToolType {
 
 export function describeTool(name: string, input: Record<string, any>): string {
   const s = (k: string) => str(input[k]);
-  const file = (k: string) => s(k).split('/').pop() || s(k);
+  const file = (k: string) => s(k).split(/[\\/]/).pop() || s(k);
   let out: string;
   switch (name) {
     case 'Bash':

@@ -5,6 +5,7 @@
 import type { ArtifactSnapshot, ChatAttachment, ChatMessage, ChoiceQuestionnaire, TokenUsage, ToolCall, ToolType } from '../../../shared/model';
 import { decodeAs } from './proto';
 import { displayUserText, parseVoiceTurn } from '../text';
+import { baseName, uriToPath } from '../paths';
 
 export const CLIENT_MSG_TAG_PREFIX = 'client_msg:';
 
@@ -173,8 +174,7 @@ function extractTitleFromSystemMessage(msgText: string): string {
   return firstLine && firstLine.length <= 40 ? firstLine : 'System Notification';
 }
 
-const stripFile = (s: string) => s.replace(/^file:\/\//, '');
-const baseName = (p: string) => p.split('/').pop() || p;
+const stripFile = uriToPath;
 
 export class TrajectoryEngine {
   /** Model enum name → display name (set by the backend from its model list). */

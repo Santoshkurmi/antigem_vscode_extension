@@ -125,7 +125,10 @@ and registers the native messaging host. The dev server and `dev/test-browser-e2
 - **Native host** `com.antigem.browser_bridge` = `bin/antigem-bridge-<platform>-<arch> --native-host` (wrapper
   `~/.antigem/chrome/antigem-native-host`), relaying Chrome's stdin/stdout to the VS Code window's Unix socket
   (`$XDG_RUNTIME_DIR/antigem/browser.sock`, else `~/.antigem/run/browser.sock`; `ANTIGEM_BROWSER_SOCKET` overrides).
-  Windows is not supported yet.
+  Windows: no wrapper. The manifest `~/.antigem/chrome/com.antigem.browser_bridge.json` names the `.exe` and is found
+  through `HKCU\Software\<browser>\NativeMessagingHosts\com.antigem.browser_bridge`. The link is a named pipe
+  `\\.\pipe\antigem-browser-<random>`, whose name is in `~/.antigem/run/browser.pipe` (`ANTIGEM_BROWSER_SOCKET` may
+  name a pipe). Not yet tested on a Windows PC.
 - **Pack a CRX later** (same id as the unpacked one):
 
 ```sh

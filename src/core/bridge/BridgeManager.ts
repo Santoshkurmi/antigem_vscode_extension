@@ -42,6 +42,29 @@ export type BridgeState = 'stopped' | 'starting' | 'running' | 'error';
 const TOKEN_FILE = path.join(os.homedir(), '.antigem_bridge', 'csrf_token.txt');
 /** Written by Stop (side bar): every VS Code window (and the dev server) leaves the bridge off until Start removes it. */
 const STOPPED_FILE = path.join(os.homedir(), '.antigem_bridge', 'stopped-by-user');
+/** Which bridge program the running bridge was started from (an extension update ships a new one). */
+const LAUNCHED_FILE = path.join(os.homedir(), '.antigem_bridge', 'launched-binary.json');
+
+/** The bridge program's identity: its path, size and date. */
+function binaryId(bin: string): string | null {
+  try {
+    const st = fs.statSync(bin);
+    return `${path.resolve(bin)}|${st.size}|${Math.round(st.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the bridge program [launched] (a binaryId) is older than [mine]: written before it (an extension is
+ * unpacked when it is installed, so a later install is a later date), or gone (its extension was removed).
+ */
+function olderBinary(launched: string, mine: string): boolean {
+  const [file, , at] = launched.split('|');
+  const mineAt = Number(mine.split('|')[2]);
+  if (!file || !fs.existsSync(file)) return true;
+  return Number(at) < mineAt;
+}
 const TOKEN_LEN = 12;
 
 export class BridgeManager {
@@ -174,12 +197,24 @@ export class BridgeManager {
           /* keep default */
         }
         const agentsOk = !this.agentFlagsChanged();
-        if ((!want || want === have) && agentsOk) {
+        // started from an older copy of the bridge program (an older extension): replace it. Unknown = keep it (a
+        // bridge from before this check; restarting would stop other windows' running chats for nothing). A newer one
+        // is kept too: a window not reloaded since the update must not swap it back, then lose it again
+        let launched: string | null = null;
+        try {
+          launched = fs.readFileSync(LAUNCHED_FILE, 'utf8').trim() || null;
+        } catch {
+          /* unknown */
+        }
+        const mine = binaryId(this.opts.binPath);
+        const sameBinary = !launched || !mine || launched === mine || !olderBinary(launched, mine);
+        if ((!want || want === have) && agentsOk && sameBinary) {
           this.state = 'running';
           this.opts.log(`[bridge] reusing bridge on ${this.baseUrl}`);
           return;
         }
-        if (!agentsOk) this.opts.log(`[bridge] the running bridge runs other agents; restarting it with ${this.wantedFlags() || 'every agent'}`);
+        if (!sameBinary) this.opts.log('[bridge] the running bridge comes from another version of the extension; restarting it');
+        else if (!agentsOk) this.opts.log(`[bridge] the running bridge runs other agents; restarting it with ${this.wantedFlags() || 'every agent'}`);
         else this.opts.log(`[bridge] the running bridge uses ~/.gemini/${have}; restarting it with ~/.gemini/${want}`);
         await this.shutdown();
         for (let i = 0; i < 30 && (await this.healthy()); i++) await new Promise((r) => setTimeout(r, 200));
@@ -215,14 +250,30 @@ export class BridgeManager {
     args.push(...agentFlags);
     this.opts.launchedFlags?.set(agentFlags.join(' '));
     fs.mkdirSync(path.dirname(this.opts.logFile), { recursive: true });
+    // a VSIX packed on Windows loses the program's run permission (macOS / Linux would refuse to start it)
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(this.opts.binPath, 0o755);
+      } catch {
+        /* read-only install: it has the permission already, or the start reports why */
+      }
+    }
     const out = fs.openSync(this.opts.logFile, 'a');
     this.opts.log(`[bridge] starting ${this.opts.binPath} ${args.join(' ')}`);
     const child = spawn(this.opts.binPath, args, {
       cwd: this.opts.workspaceDir,
       detached: true,
+      // Windows: no console window for the bridge
+      windowsHide: true,
       stdio: ['ignore', out, out],
       env: { ...process.env },
     });
+    const id = binaryId(this.opts.binPath);
+    try {
+      if (id) fs.writeFileSync(LAUNCHED_FILE, id);
+    } catch {
+      /* next start just reuses */
+    }
     child.on('error', (e) => this.opts.log(`[bridge] spawn error: ${e.message}`));
     child.unref();
     fs.closeSync(out);

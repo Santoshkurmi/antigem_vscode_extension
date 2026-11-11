@@ -81,7 +81,7 @@ export function extractAttachedFiles(text: string, idPrefix: string): { text: st
       const p = lm[1] || lm[2];
       cards.push({
         id: `${idPrefix}_file_${i++}`,
-        name: p.replace(/\/+$/, '').split('/').pop() || p,
+        name: p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p,
         path: p,
         isImage: false,
         isAudio: false,
@@ -157,7 +157,7 @@ export function extractSelections(text: string, idPrefix: string): ChatAttachmen
     const b = Number(m[3]);
     out.push({
       id: `${idPrefix}_sel_${i++}`,
-      name: `${p.split('/').pop() || p}:${a === b ? a : `${a}-${b}`}`,
+      name: `${p.split(/[\\/]/).pop() || p}:${a === b ? a : `${a}-${b}`}`,
       path: p,
       isImage: false,
       isAudio: false,

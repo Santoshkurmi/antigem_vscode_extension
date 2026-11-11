@@ -1,14 +1,16 @@
-// The VS Code end of the AntiGem browser link: a per-user Unix socket (dir 0700, socket 0600) the native host
-// (`antigem-bridge --native-host`, started by Chrome for our extension only) connects to. Newline-delimited JSON:
+// The VS Code end of the AntiGem browser link: a per-user Unix socket (dir 0700, socket 0600), or on Windows a named
+// pipe, the native host (`antigem-bridge --native-host`, started by Chrome for our extension only) connects to.
+// Newline-delimited JSON:
 //   VS Code -> extension  {id, command, payload} | {type:'ping'}
 //   extension -> VS Code  {id, success, result | error, code} | {type:'hello'|'pong'|'event'} | {type:'host_hello'} (host)
 // Served by the window that owns the MCP port (McpHost.start() resolved true). No TCP: web pages and other users can
 // never reach it.
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import type { Logger } from '../types';
-import { EXTENSION_ID, EXTENSION_ORIGIN, socketCandidates } from './constants';
+import { EXTENSION_ID, EXTENSION_ORIGIN, PIPE_NAME_FILE, PIPE_PREFIX, socketCandidates } from './constants';
 
 export interface BrowserHello {
   protocol: number;
@@ -82,6 +84,8 @@ export class BrowserBridge {
   status: BridgeStatus = 'stopped';
   error = '';
   socketPath: string | null = null;
+  /** Windows: the pipe name this window wrote to PIPE_NAME_FILE (removed again on stop). */
+  private pipeNameWritten: string | null = null;
 
   constructor(private opts: BrowserBridgeOptions) {}
 
@@ -112,26 +116,12 @@ export class BrowserBridge {
   /** Starts listening (call only in the window that owns the MCP port). */
   async start(): Promise<BridgeStatus> {
     if (this.server) return this.status;
-    if (process.platform === 'win32') {
-      this.status = 'unsupported';
-      this.error = 'Browser control is not supported on Windows yet (AntiGem v1 supports Linux and macOS).';
-      this.changed();
-      return this.status;
-    }
+    if (process.platform === 'win32') return this.startPipe();
     const candidates = socketCandidates(this.opts.socketPath);
     let lastErr = '';
     for (const p of candidates) {
       try {
-        const r = await this.listen(p);
-        this.status = r;
-        this.socketPath = p;
-        this.error = r === 'busy' ? `Another AntiGem window or VS Code already serves ${p}` : '';
-        if (r === 'listening') {
-          this.opts.log(`[browser] waiting for the AntiGem Chrome extension on ${p}`);
-          this.heartbeat = setInterval(() => this.beat(), 15_000);
-        } else this.opts.log(`[browser] ${this.error}`);
-        this.changed();
-        return this.status;
+        return this.started(await this.listen(p), p);
       } catch (e) {
         lastErr = e instanceof Error ? e.message : String(e);
       }
@@ -167,15 +157,91 @@ export class BrowserBridge {
     return 'listening';
   }
 
+  /**
+   * Windows: a named pipe with a new random name (\\.\pipe\antigem-browser-<random>), written to PIPE_NAME_FILE for the
+   * native host. Only this user can read their profile folder, so no other user learns the name in advance; the
+   * default pipe security lets other users read at most, never write (so they cannot pose as the extension).
+   */
+  private async startPipe(): Promise<BridgeStatus> {
+    const forced = this.opts.socketPath || process.env.ANTIGEM_BROWSER_SOCKET || null;
+    try {
+      let name = forced;
+      if (forced) {
+        if (await alive(forced)) return this.started('busy', forced);
+      } else {
+        // the window that serves the link already: its pipe still answers
+        let current = '';
+        try {
+          current = fs.readFileSync(PIPE_NAME_FILE, 'utf8').trim();
+        } catch {
+          /* none yet */
+        }
+        if (current.toLowerCase().startsWith(PIPE_PREFIX) && (await alive(current))) return this.started('busy', current);
+        name = `${PIPE_PREFIX}${randomBytes(16).toString('hex')}`;
+      }
+      const srv = net.createServer((s) => this.accept(s));
+      await new Promise<void>((resolve, reject) => {
+        srv.once('error', reject);
+        srv.listen(name!, () => {
+          srv.off('error', reject);
+          resolve();
+        });
+      });
+      srv.on('error', (e) => this.opts.log(`[browser] pipe error: ${e.message}`));
+      this.server = srv;
+      if (!forced) {
+        fs.mkdirSync(path.dirname(PIPE_NAME_FILE), { recursive: true });
+        const tmp = `${PIPE_NAME_FILE}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, `${name}\n`);
+        try {
+          fs.renameSync(tmp, PIPE_NAME_FILE);
+        } catch {
+          // the native host is reading the old file this very moment: write it in place
+          fs.rmSync(tmp, { force: true });
+          fs.writeFileSync(PIPE_NAME_FILE, `${name}\n`);
+        }
+        this.pipeNameWritten = name;
+      }
+      return this.started('listening', name!);
+    } catch (e) {
+      this.status = 'error';
+      this.error = `Could not open the browser pipe: ${e instanceof Error ? e.message : String(e)}`;
+      this.opts.log(`[browser] ${this.error}`);
+      this.changed();
+      return this.status;
+    }
+  }
+
+  private started(r: 'listening' | 'busy', p: string): BridgeStatus {
+    this.status = r;
+    this.socketPath = p;
+    this.error = r === 'busy' ? `Another AntiGem window or VS Code already serves ${p}` : '';
+    if (r === 'listening') {
+      this.opts.log(`[browser] waiting for the AntiGem Chrome extension on ${p}`);
+      this.heartbeat = setInterval(() => this.beat(), 15_000);
+    } else this.opts.log(`[browser] ${this.error}`);
+    this.changed();
+    return this.status;
+  }
+
   stop() {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
     for (const c of this.clients.values()) c.socket.destroy();
     this.clients.clear();
+    // Windows: the pipe goes with the server; its name file only when it still names this window's pipe
+    if (this.pipeNameWritten) {
+      try {
+        if (fs.readFileSync(PIPE_NAME_FILE, 'utf8').trim() === this.pipeNameWritten) fs.unlinkSync(PIPE_NAME_FILE);
+      } catch {
+        /* gone */
+      }
+      this.pipeNameWritten = null;
+    }
     if (this.server) {
       this.server.close();
       this.server = null;
-      if (this.socketPath && this.status === 'listening') {
+      if (this.socketPath && this.status === 'listening' && process.platform !== 'win32') {
         try {
           fs.unlinkSync(this.socketPath);
         } catch {

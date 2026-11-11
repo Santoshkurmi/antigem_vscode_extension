@@ -21,3 +21,6 @@ func Terminate(pid int, force bool) {
 	}
 	_ = syscall.Kill(-pid, sig)
 }
+
+// HideConsole is a no-op on Unix: child processes never open a console window there.
+func HideConsole(cmd *exec.Cmd) {}

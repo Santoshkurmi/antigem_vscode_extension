@@ -10,6 +10,7 @@ import type { SettingFormField, SettingItem, SettingListRow, SettingsPage, Setti
 import type { AgentSettingsProvider } from '../types';
 import type { AgyBackend } from './AgyBackend';
 import { applyQuota } from './quota';
+import { uriToPath } from '../paths';
 import { decodeAs, encodeAs, lengthDelimited, patchMessage, rawFields } from './proto';
 import {
   MCP_EDIT,
@@ -535,7 +536,7 @@ export class AgySettings implements AgentSettingsProvider {
         .filter((p: any) => p.id !== 'outside-of-project')
         .map((p: any) => {
           const r = p.project_resources?.resources?.[0];
-          const folder = String(r?.folder_uri ?? r?.git_folder?.folder_uri ?? '').replace(/^file:\/\//, '');
+          const folder = uriToPath(String(r?.folder_uri ?? r?.git_folder?.folder_uri ?? ''));
           return {
             id: p.id,
             name: p.name || p.id,
@@ -998,7 +999,7 @@ export class AgySettings implements AgentSettingsProvider {
           id: 'skills',
           title: '',
           agent: 'AGY',
-          description: ws ? `Workspace: ${ws.replace(/^file:\/\//, '')}` : 'Type / in the composer to use them',
+          description: ws ? `Workspace: ${uriToPath(ws)}` : 'Type / in the composer to use them',
           items: [
             { kind: 'select', id: 'scope', label: 'Show', value: this.skillScope, options: SKILL_SCOPES },
             {
@@ -1199,7 +1200,9 @@ export class AgySettings implements AgentSettingsProvider {
         title: '',
         agent: 'AGY',
         description:
-          "Installed with Google's official installer (antigravity.google/cli/install.sh) into ~/.local/bin. Check for updates runs `agy update`; restart the bridge afterwards so the hub uses the new agy.",
+          process.platform === 'win32'
+            ? 'On Windows, install the Antigravity CLI from antigravity.google, then restart the bridge. Check for updates runs `agy update`.'
+            : "Installed with Google's official installer (antigravity.google/cli/install.sh) into ~/.local/bin. Check for updates runs `agy update`; restart the bridge afterwards so the hub uses the new agy.",
         items: this.cliItems(),
       },
       { id: 'account', title: '', agent: 'AGY', items: this.accountItems() },
@@ -1395,7 +1398,7 @@ export class AgySettings implements AgentSettingsProvider {
     if (page === 'agy.skills' && rowId) {
       if (id === 'skills' && actionId === 'view') {
         const s = (this.skills ?? []).find((x) => (x.path || x.name) === rowId);
-        if (s?.path) this.b.openFile(String(s.path).replace(/^file:\/\//, ''));
+        if (s?.path) this.b.openFile(uriToPath(String(s.path)));
         return;
       }
       if (id === 'plugins') {

@@ -12,6 +12,7 @@ import { agentName } from './controller';
 import type { JarvisEngine } from './engine';
 import { missionDone, missionIsEmpty } from './managers';
 import * as JText from './text';
+import { baseName, expandHome, pathToUri } from '../paths';
 import { TASK_LABEL, needsUserState, type Task, type Team } from './types';
 
 export const INSTRUCTIONS =
@@ -903,7 +904,7 @@ class JarvisMcp {
 
   private convJson(c: Conversation) {
     const o: Record<string, unknown> = { id: c.id, title: c.title, agent: c.agent.toLowerCase(), running: this.j.driver.isBusy(c.id) || c.isRunning };
-    o.project = path.basename(c.workspaceUri.replace(/^file:\/\//, '').replace(/\/+$/, ''));
+    o.project = c.workspaceUri ? baseName(c.workspaceUri) : '';
     if (c.modelId) o.model = c.modelId;
     o.updated = ago(c.updatedAt);
     if (this.j.prefs.isJarvisChat(c.id)) o.jarvis_chat = true;
@@ -1387,9 +1388,9 @@ class JarvisMcp {
       all.find((p) => p.name.toLowerCase().includes(t)) ??
       all.find((p) => p.path.toLowerCase().includes(t));
     if (hit) return hit;
-    const abs = raw.startsWith('~/') ? path.join(process.env.HOME ?? '', raw.slice(2)) : raw;
+    const abs = expandHome(raw);
     try {
-      if (path.isAbsolute(abs) && fs.statSync(abs).isDirectory()) return { name: path.basename(abs), path: abs, uri: `file://${abs}`, source: 'saved' };
+      if (path.isAbsolute(abs) && fs.statSync(abs).isDirectory()) return { name: path.basename(abs), path: abs, uri: pathToUri(abs), source: 'saved' };
     } catch {
       /* not a folder */
     }
@@ -1415,9 +1416,9 @@ class JarvisMcp {
 
   private async resolveFile(file: string, root: string): Promise<string | null> {
     const f = file.trim();
-    if (f.startsWith('~/')) return path.join(process.env.HOME ?? '', f.slice(2));
+    if (/^~[\\/]/.test(f)) return expandHome(f);
     if (path.isAbsolute(f)) return f;
-    if (root && f.includes('/')) {
+    if (root && /[\\/]/.test(f)) {
       const p = path.join(root, f.replace(/^\.\//, ''));
       if (fs.existsSync(p)) return p;
     }

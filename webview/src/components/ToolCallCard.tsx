@@ -9,6 +9,7 @@ import { alpha, formatDuration } from '../util/format';
 import { copyText, openConversation, readImage, send, sendMessage, state, stop } from '../state/store';
 import { DiffView, looksLikeDiff } from './CodeBlock';
 import { hasIcon } from '../ui/iconData';
+import { fileLinkToPath } from '../util/paths';
 
 // the agent's own icon names (agy's step_render_info) → the icons this UI has
 const AGENT_ICON: Record<string, IconName> = {
@@ -318,7 +319,7 @@ function ToolRow(props: { call: ToolCall }) {
   };
   const imagePath = () => {
     const o = t().output.trim();
-    return o.startsWith('data:image/') || /^https?:/i.test(o) ? null : o.replace(/^file:\/\//, '');
+    return o.startsWith('data:image/') || /^https?:/i.test(o) ? null : fileLinkToPath(o);
   };
   // long output / a diff opens in an editor tab
   const canOpenText = () => !!t().output && (showDiff() || t().output.split('\n').length > 40 || t().output.length > 4000);

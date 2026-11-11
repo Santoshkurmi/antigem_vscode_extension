@@ -7,12 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 
 	"gemini-server/pkg/config"
 	"gemini-server/pkg/models"
+	"gemini-server/pkg/procgroup"
 )
 
 var (
@@ -35,6 +37,14 @@ func getGitBinary() string {
 
 func getEnv() []string {
 	env := os.Environ()
+	if runtime.GOOS == "windows" {
+		// `Path` there, with ';' between folders and none of the Unix/Termux ones
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			return env
+		}
+		return config.PrependPath(env, filepath.Join(home, ".local", "bin"), filepath.Join(home, ".gemini", "bin"))
+	}
 	termuxBin := "/data/data/com.termux/files/usr/bin"
 	home, _ := os.UserHomeDir()
 	localBin := filepath.Join(home, ".local", "bin")
@@ -82,14 +92,26 @@ func cleanDir(dir string) (string, error) {
 	return d, nil
 }
 
+// gitCommand runs git through sh (as on Linux/Android), or directly on Windows, which has no sh.
+func gitCommand(args ...string) *exec.Cmd {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command(getGitBinary(), args...)
+	} else {
+		shArgs := append([]string{"-c", `exec git "$@"`, "git"}, args...)
+		cmd = exec.Command("sh", shArgs...)
+	}
+	procgroup.HideConsole(cmd)
+	return cmd
+}
+
 func runGitCmd(dir string, args ...string) (string, error) {
 	resolvedDir, err := cleanDir(dir)
 	if err != nil {
 		return "", err
 	}
 
-	shArgs := append([]string{"-c", `exec git "$@"`, "git"}, args...)
-	cmd := exec.Command("sh", shArgs...)
+	cmd := gitCommand(args...)
 	cmd.Dir = resolvedDir
 	cmd.Env = getEnv()
 
@@ -117,8 +139,7 @@ func runGitDiffCmd(dir string, args ...string) (string, error) {
 		return "", err
 	}
 
-	shArgs := append([]string{"-c", `exec git "$@"`, "git"}, args...)
-	cmd := exec.Command("sh", shArgs...)
+	cmd := gitCommand(args...)
 	cmd.Dir = resolvedDir
 	cmd.Env = getEnv()
 

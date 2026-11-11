@@ -208,7 +208,10 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       id,
       label: running ? 'Installing…' : 'Install OpenCode',
       style: 'primary',
-      description: 'Downloads the official build (~250 MB) into ~/.opencode/bin. Or in a terminal: curl -fsSL https://opencode.ai/v2/install | bash',
+      description:
+        process.platform === 'win32'
+          ? 'Not from here on Windows: in a terminal run npm install -g opencode-ai, then restart the bridge.'
+          : 'Downloads the official build (~250 MB) into ~/.opencode/bin. Or in a terminal: curl -fsSL https://opencode.ai/v2/install | bash',
       disabled: running,
     };
   }

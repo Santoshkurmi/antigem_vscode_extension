@@ -105,14 +105,20 @@ export class McpHost {
     if (this.server) return Promise.resolve(this.boundPort != null);
     return new Promise((resolve) => {
       const srv = http.createServer((req, res) => void this.handle(req, res));
+      let listening = false;
       srv.on('error', (e: NodeJS.ErrnoException) => {
-        if (e.code === 'EADDRINUSE') {
-          this.opts.log(`[mcp] port ${this.opts.port} is in use (another window serves the built-in MCPs)`);
-          this.server = null;
-          resolve(false);
-        } else this.opts.log(`[mcp] server error: ${e.message}`);
+        if (listening) {
+          this.opts.log(`[mcp] server error: ${e.message}`);
+          return;
+        }
+        this.server = null;
+        if (e.code === 'EADDRINUSE') this.opts.log(`[mcp] port ${this.opts.port} is in use (another window serves the built-in MCPs)`);
+        // Windows keeps port ranges for Hyper-V / WSL / Docker (EACCES): never wait forever for a port that is refused
+        else this.opts.log(`[mcp] cannot use port ${this.opts.port} (${e.code ?? e.message}): set another one in the antigem.mcpPort setting`);
+        resolve(false);
       });
       srv.listen(this.opts.port, '127.0.0.1', () => {
+        listening = true;
         this.server = srv;
         this.boundPort = this.opts.port;
         this.opts.log(`[mcp] built-in MCP servers on 127.0.0.1:${this.opts.port} (${[...this.servers.keys()].join(' ')})`);

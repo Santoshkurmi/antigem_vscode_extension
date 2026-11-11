@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gemini-server/pkg/procgroup"
 )
 
 // --- settings.json --------------------------------------------------------------------------------
@@ -50,6 +52,21 @@ func (m *Manager) handleSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	if raw, err := os.ReadFile(m.settingsPath()); err == nil && json.Unmarshal(raw, &s) == nil {
 		resp["enabled"] = s.Sandbox.Enabled
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		// Claude Code uses Seatbelt (sandbox-exec) on macOS
+		if _, err := os.Stat("/usr/bin/sandbox-exec"); err == nil {
+			resp["available"] = true
+		} else {
+			resp["reason"] = "sandbox-exec is not available"
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	case "windows":
+		resp["reason"] = "Sandboxing is not supported on Windows"
+		writeJSON(w, http.StatusOK, resp)
+		return
 	}
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
@@ -368,6 +385,7 @@ func (m *Manager) runCLIIn(cwd string, timeout time.Duration, args ...string) ([
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
 	cmd.Stdin = nil
+	procgroup.HideConsole(cmd)
 	return cmd.CombinedOutput()
 }
 
@@ -514,7 +532,12 @@ func (m *Manager) handleCLIJob(w http.ResponseWriter, r *http.Request, action st
 	var cmd *exec.Cmd
 	switch action {
 	case "install":
-		cmd = exec.Command("bash", "-lc", "curl -fsSL https://claude.ai/install.sh | bash")
+		if runtime.GOOS == "windows" {
+			// the official Windows installer (never bash there: bash.exe is usually WSL's, a different machine)
+			cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://claude.ai/install.ps1 | iex")
+		} else {
+			cmd = exec.Command("bash", "-lc", "curl -fsSL https://claude.ai/install.sh | bash")
+		}
 	case "update":
 		bin, err := m.ResolveBinary()
 		if err != nil {
@@ -528,6 +551,7 @@ func (m *Manager) handleCLIJob(w http.ResponseWriter, r *http.Request, action st
 	}
 	cmd.Dir = m.HomeDir
 	cmd.Env = os.Environ()
+	procgroup.HideConsole(cmd)
 	nj := &cliJob{Kind: action, Running: true, Started: time.Now()}
 	cmd.Stdout = nj
 	cmd.Stderr = nj

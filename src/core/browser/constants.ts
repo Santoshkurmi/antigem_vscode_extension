@@ -10,8 +10,13 @@ export const HOST_NAME = 'com.antigem.browser_bridge';
 /** Line protocol version between the extension and VS Code. */
 export const PROTOCOL = 1;
 
+/** Windows: every pipe the browser link listens on is called \\.\pipe\antigem-browser-<random> (lower case). */
+export const PIPE_PREFIX = '\\\\.\\pipe\\antigem-browser-';
+/** Windows: the file naming the current pipe (read by the native host on every connection attempt). */
+export const PIPE_NAME_FILE = path.join(os.homedir(), '.antigem', 'run', 'browser.pipe');
+
 /**
- * Where the VS Code window that serves the MCP port listens for the native host, most preferred first:
+ * Where the VS Code window that serves the MCP port listens for the native host (Linux / macOS), most preferred first:
  * $ANTIGEM_BROWSER_SOCKET, else $XDG_RUNTIME_DIR/antigem/browser.sock, else ~/.antigem/run/browser.sock (the host tries
  * every candidate, since Chrome and VS Code may not share one environment).
  */

@@ -5,6 +5,7 @@
 import type { AgentKind, ChoiceQuestion, ChoiceQuestionnaire } from '../../../shared/model';
 import type { ApprovalView, JarvisLogEntry, JarvisNoticeView } from '../../../shared/protocol';
 import { hiddenBlock } from '../text';
+import { baseName } from '../paths';
 import type { KeyValueStore } from '../types';
 import type { JarvisEngine } from './engine';
 import { newEvent } from './events';
@@ -40,7 +41,7 @@ function commandOf(a: ApprovalView): string {
   return p.startsWith('$ ') ? p.slice(2).split('\n')[0] : p.split('\n')[0];
 }
 
-const base = (p: string | null | undefined) => (p ?? '').replace(/\/+$/, '').split('/').pop() || '';
+const base = (p: string | null | undefined) => (p ? baseName(p) : '');
 
 /** An approval card as Jarvis sees it: what it wants (one line), the tool, the risk. */
 export function describeApproval(a: ApprovalView): { tool: string; summary: string; risk: Risk } {

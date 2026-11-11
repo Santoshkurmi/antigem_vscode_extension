@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"gemini-server/pkg/procgroup"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -400,6 +402,7 @@ func (m *Manager) runCLI(timeout time.Duration, args ...string) ([]byte, error) 
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = m.HomeDir
+	procgroup.HideConsole(cmd)
 	return cmd.Output()
 }
 

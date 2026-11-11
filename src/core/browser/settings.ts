@@ -6,6 +6,7 @@ import type { SettingItem, SettingsPage, SettingsSection } from '../../../shared
 import type { Logger } from '../types';
 import { type BrowserBridge, BrowserError } from './bridge';
 import { EXTENSION_ID, HOST_NAME } from './constants';
+import { tildePath } from '../paths';
 import { defaultWrapperPath, extensionVersion, installExtensionFiles, register, registrationStatus, unregister } from './nativeHost';
 
 export interface BrowserHooks {
@@ -30,10 +31,8 @@ export interface BrowserSettingsDeps {
   mcpPort: number;
 }
 
-const tilde = (p: string) => {
-  const home = os.homedir();
-  return p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
-};
+// `~` means nothing in a Windows folder picker: the full path there
+const tilde = (p: string) => (process.platform === 'win32' ? p : tildePath(p));
 
 export const INSTALL_DIR = path.join(os.homedir(), '.antigem', 'chrome-extension');
 
@@ -78,7 +77,7 @@ export class BrowserSettings implements BrowserHooks {
 
   async page(_id: string): Promise<SettingsPage> {
     const st = this.statusLine();
-    const reg = registrationStatus(this.d.binPath);
+    const reg = await registrationStatus(this.d.binPath);
     const installedBrowsers = reg.browsers.filter((b) => b.installed);
     const registered = reg.browsers.filter((b) => b.registered);
     const regText = !registered.length
@@ -129,7 +128,10 @@ export class BrowserSettings implements BrowserHooks {
           kind: 'info',
           id: 'browser.steps',
           label: 'Load it in Chrome',
-          value: `Open chrome://extensions (brave://extensions, edge://extensions), turn on Developer mode, press “Load unpacked” and pick ${tilde(INSTALL_DIR)}. Its id must be ${EXTENSION_ID}. Pin the AntiGem icon to see its status.`,
+          value:
+            `Open chrome://extensions (brave://extensions, edge://extensions), turn on Developer mode, press “Load unpacked” and pick ${tilde(INSTALL_DIR)}` +
+            // the macOS folder picker hides folders whose name starts with a dot
+            `${process.platform === 'darwin' ? ' (press Cmd+Shift+. in the folder picker to show the hidden .antigem folder)' : ''}. Its id must be ${EXTENSION_ID}. Pin the AntiGem icon to see its status.`,
           tone: 'muted',
         },
         {
@@ -146,7 +148,10 @@ export class BrowserSettings implements BrowserHooks {
                 kind: 'button' as const,
                 id: 'browser.unregister',
                 label: 'Remove the registration',
-                description: `Deletes ${HOST_NAME}.json from every browser and the wrapper ${tilde(defaultWrapperPath())}`,
+                description:
+                  process.platform === 'win32'
+                    ? `Deletes the registry keys …\\NativeMessagingHosts\\${HOST_NAME} of every browser and ${tilde(defaultWrapperPath())}`
+                    : `Deletes ${HOST_NAME}.json from every browser and the wrapper ${tilde(defaultWrapperPath())}`,
                 style: 'danger' as const,
                 confirm: 'Remove the AntiGem native host from all browsers? The extension cannot reach VS Code until you register again.',
               },
@@ -208,12 +213,12 @@ export class BrowserSettings implements BrowserHooks {
         this.d.copy(INSTALL_DIR);
         return 'Path copied';
       case 'browser.register': {
-        const r = register({ binPath: this.d.binPath });
+        const r = await register({ binPath: this.d.binPath });
         this.d.log(`[browser] native host registered: ${r.written.join(', ')}`);
         return `Registered for ${r.browsers.join(', ')}. Restart the browser if the extension still says it is not registered.`;
       }
       case 'browser.unregister': {
-        const removed = unregister();
+        const removed = await unregister();
         return removed.length ? `Removed from ${removed.length} browser${removed.length === 1 ? '' : 's'}` : 'Nothing was registered';
       }
       case 'browser.test': {

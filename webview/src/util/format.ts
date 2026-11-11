@@ -115,8 +115,9 @@ export function dayKey(ms: number): string {
 
 export function workspaceName(uri: string | null | undefined): string {
   if (!uri) return '';
-  const clean = uri.replace(/^file:\/\//, '').replace(/\/+$/, '');
-  const name = clean.substring(clean.lastIndexOf('/') + 1);
+  // a link (file:///c%3A/…) or a path of any OS (C:\Users\…, /home/…)
+  const clean = uri.replace(/^file:\/\//, '').replace(/[\\/]+$/, '');
+  const name = clean.split(/[\\/]/).pop() ?? clean;
   try {
     return decodeURIComponent(name) || 'Workspace';
   } catch {

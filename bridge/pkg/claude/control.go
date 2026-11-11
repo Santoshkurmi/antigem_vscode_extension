@@ -8,8 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
+
+	"gemini-server/pkg/procgroup"
 )
 
 // controlProc is a short-lived `claude` process used only for control requests (login, usage, model info,
@@ -41,6 +44,7 @@ func (m *Manager) startControlProc(cwd string) (*controlProc, error) {
 		"--no-session-persistence", "--setting-sources=user,project,local")
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
+	procgroup.HideConsole(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -143,6 +147,11 @@ func (p *controlProc) request(body map[string]interface{}, timeout time.Duration
 func (p *controlProc) close() {
 	_ = p.stdin.Close()
 	if p.cmd.Process != nil {
+		if runtime.GOOS == "windows" {
+			// claude may be npm's claude.cmd: kill the tree, not just cmd.exe
+			procgroup.Terminate(p.cmd.Process.Pid, true)
+			return
+		}
 		_ = p.cmd.Process.Kill()
 	}
 }

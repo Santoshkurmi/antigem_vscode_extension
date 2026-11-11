@@ -16,6 +16,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { playerPage } from './player';
+import { uriToPath } from '../paths';
 
 type Entry =
   | { kind: 'html'; html: string; at: number }
@@ -150,7 +151,7 @@ export class PreviewServer {
 
   /** An app on disk: its .html file, with the files of its folder (css, js, images) next to it. */
   htmlFile(file: string): string {
-    const abs = path.resolve(file.replace(/^file:\/\//, ''));
+    const abs = path.resolve(uriToPath(file));
     if (!/\.html?$/i.test(abs)) throw new Error('Not an .html file');
     if (!fs.statSync(abs).isFile()) throw new Error('Not a file');
     const dir = path.dirname(abs);
@@ -161,7 +162,7 @@ export class PreviewServer {
 
   /** A local video / audio file. */
   file(file: string): string {
-    const abs = path.resolve(file.replace(/^file:\/\//, ''));
+    const abs = path.resolve(uriToPath(file));
     if (!PLAYABLE.test(abs)) throw new Error('Not a video or audio file');
     if (!fs.statSync(abs).isFile()) throw new Error('Not a file');
     const name = encodeURIComponent(path.basename(abs));

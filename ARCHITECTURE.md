@@ -113,6 +113,7 @@ they port.
 | `1246` (`antigem.mcpPort`) | Built-in MCP servers: `/notes`, `/theme`, `/jarvis`, `/browser`, `/extension_developer`, `/mcp?extension=<id>` | Requests with the `X-Device-Id` header and **no** `Origin` header (see 6.2) |
 | random port | `opencode serve` | The bridge |
 | `$XDG_RUNTIME_DIR/antigem/browser.sock` (fallback `~/.antigem/run/browser.sock`) | Browser link | The current user only (folder `0700`, socket `0600`, owner checked) |
+| Windows: `\\.\pipe\antigem-browser-<random>`, named in `~/.antigem/run/browser.pipe` | Browser link | The current user: a new random name each start, written only in their profile folder; other users get read access to the pipe at most, never write |
 
 ### Outbound requests made by AntiGem itself
 - **Plugin repositories:** `api.github.com` / `raw.githubusercontent.com`. This happens when the user opens the plugin
@@ -161,6 +162,9 @@ with a per-load nonce.
   - It writes `com.antigem.browser_bridge.json` (with `allowed_origins` = that ID only) into the browsers'
     `NativeMessagingHosts` folders.
   - It writes a small wrapper script at `~/.antigem/chrome/antigem-native-host`.
+  - On Windows it writes one manifest, `~/.antigem/chrome/com.antigem.browser_bridge.json`, which names the bridge
+    `.exe` itself (Chrome passes its origin, which starts native-host mode). Per installed browser it adds a registry
+    key `HKCU\Software\<browser>\NativeMessagingHosts\com.antigem.browser_bridge` (with `reg.exe`, no admin rights).
 - **Handshake:** the extension host refuses a native host started for another origin, and an extension whose hello
   carries another ID.
 - **No outside access:** the Chrome extension has no `externally_connectable`, so web pages and other extensions
@@ -194,6 +198,8 @@ settings.
 | `~/.antigem/browser-extensions/` (+ `.antigem-state/`) | Installed plugins and their state | On plugin install / update / remove |
 | `~/.antigem/chrome-extension/`, `~/.antigem/chrome/antigem-native-host` | Copy of the Chrome extension for *Load unpacked*, and the native-host wrapper | Only from *Settings → Browser* buttons |
 | Browser `NativeMessagingHosts/com.antigem.browser_bridge.json` | Native host registration | Only on *Register with Chrome* |
+| Windows: `~/.antigem/chrome/com.antigem.browser_bridge.json` + `HKCU\Software\<browser>\NativeMessagingHosts\com.antigem.browser_bridge` | Native host registration | Only on *Register with Chrome* |
+| Windows: `~/.antigem/run/browser.pipe` | Name of the browser link's pipe | While the window that serves the browser link runs |
 | `~/.gemini/<antigravity-ide \| antigravity \| antigravity-cli>/` | Antigravity history, written by the agy hub | While agy runs |
 | `~/.claude/projects/…` (read) | Claude Code transcripts, read to show chat history and subagents | Opening chats |
 | Agent configuration (agy `mcp_config.json`, Claude `settings.json` / MCP config, Codex `config.toml`, OpenCode config) | Changed through each agent's own API or CLI | Only when the user changes that agent's settings in AntiGem |

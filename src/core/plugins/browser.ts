@@ -81,7 +81,7 @@ export class NoBrowser implements BrowserProvider {
 
 const run = (cmd: string, args: string[]) =>
   new Promise<string>((resolve, reject) =>
-    execFile(cmd, args, { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout: 60_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       if (err) {
         const e = err as NodeJS.ErrnoException;
         reject(new Error(e.code === 'ENOENT' ? `${cmd} is required for media info on this PC (install ffmpeg)` : `${cmd}: ${String(stderr || err.message).trim().slice(0, 300)}`));

@@ -179,7 +179,7 @@ async function main() {
   const profile = path.join(WORK, 'profile');
   fs.mkdirSync(profile, { recursive: true });
   // the native host manifest inside the throwaway profile (Chrome reads <user-data-dir>/NativeMessagingHosts)
-  const reg = register({
+  const reg = await register({
     binPath: path.join(ROOT, 'bin', `antigem-bridge-${process.platform}-${process.arch}`),
     dirs: [path.join(profile, 'NativeMessagingHosts')],
     wrapper: path.join(WORK, 'native', 'antigem-native-host'),

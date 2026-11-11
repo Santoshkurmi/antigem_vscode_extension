@@ -1,25 +1,33 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
+
+	"gemini-server/pkg/procgroup"
 
 	"github.com/gorilla/websocket"
 )
 
 const voiceEndpoint = "wss://api.anthropic.com/api/ws/speech_to_text/voice_stream"
 
-// oauthAccessToken reads the claude.ai OAuth token the CLI stored. If it is about to expire, `claude auth status`
-// is run first so the CLI can refresh it.
+// oauthAccessToken reads the claude.ai OAuth token the CLI stored (~/.claude/.credentials.json; on macOS the login
+// Keychain, with the same JSON). If it is about to expire, `claude auth status` is run first so the CLI can refresh it.
 func (m *Manager) oauthAccessToken() (string, error) {
 	read := func() (string, int64, error) {
 		data, err := os.ReadFile(filepath.Join(m.HomeDir, ".claude", ".credentials.json"))
+		if err != nil && runtime.GOOS == "darwin" {
+			data, err = keychainCredentials()
+		}
 		if err != nil {
 			return "", 0, errors.New("not signed in to Claude (no credentials)")
 		}
@@ -43,6 +51,19 @@ func (m *Manager) oauthAccessToken() (string, error) {
 		tok, _, err = read()
 	}
 	return tok, err
+}
+
+// keychainCredentials is the credentials JSON Claude Code keeps in the macOS login Keychain.
+func keychainCredentials() ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "security", "find-generic-password", "-s", "Claude Code-credentials", "-w")
+	procgroup.HideConsole(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // serveVoiceWS relays one dictation session: binary PCM frames (16 kHz, mono, s16le) from the app go to

@@ -8,6 +8,7 @@ import { collapseExpansions, hiddenBlock } from '../text';
 import type { KeyValueStore } from '../types';
 import type { JarvisEngine } from './engine';
 import * as JText from './text';
+import { pathToUri, uriToPath } from '../paths';
 import { isActiveState, needsUserState, type Task, type TaskState } from './types';
 
 const KEY = 'jarvis.tasks';
@@ -105,7 +106,7 @@ export class Tasks {
         text: prompt,
         attachments: [],
         modelId: modelId || null,
-        workspaceUri: ws ? (ws.startsWith('file://') ? ws : `file://${ws}`) : null,
+        workspaceUri: ws ? pathToUri(ws) : null,
         effort: controls.effort ?? null,
         thinking: controls.thinking ?? null,
       });
@@ -158,7 +159,7 @@ export class Tasks {
       agent,
       title: conv?.title && conv.title !== 'New Chat' ? conv.title.slice(0, 60) : shortTitle(message),
       goal: message.trim().slice(0, 600),
-      project: conv?.workspaceUri?.replace(/^file:\/\//, '') ?? '',
+      project: conv?.workspaceUri ? uriToPath(conv.workspaceUri) : '',
       state: 'STARTING',
       createdAt: now,
       turnAt: now,

@@ -12,6 +12,7 @@ import { GrpcClient, GrpcError } from './grpc';
 import { HubRpc, decodeAs, encodeAs, lengthDelimited, patchMessage, rawFields } from './proto';
 import { CLIENT_MSG_TAG_PREFIX, TrajectoryEngine, interactionTypeOf } from './trajectory';
 import { attachedFilesBlock, cleanTitle, collapseExpansions } from '../text';
+import { baseName, pathToUri, uriToPath } from '../paths';
 import { agySlashCommands, applyQuota, modelKey, parseQuotaSummary, type QuotaGroup } from './quota';
 import { AgySettings } from './AgySettings';
 
@@ -26,7 +27,7 @@ const IMAGE_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg'
 const isNumericEnum = (id: string) => /^\d+$/.test(id);
 const enumValue = (id: string) => (isNumericEnum(id) ? Number(id) : id);
 const tsMillis = (ts: any): number | null => (ts ? Number(ts.seconds ?? 0) * 1000 + Math.floor(Number(ts.nanos ?? 0) / 1e6) : null);
-const toFileUri = (p: string) => (p.startsWith('file://') ? p : `file://${p}`);
+const toFileUri = pathToUri;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const stamp = () => {
   const now = Date.now();
@@ -95,21 +96,13 @@ class HubMedia {
   constructor(private b: AgyBackend) {}
 
   static pathOf(uri: string): string {
-    let p = uri.trim();
-    if (p.startsWith('file://')) {
-      try {
-        p = decodeURIComponent(new URL(p).pathname);
-      } catch {
-        p = p.slice(7);
-      }
-    }
-    return p;
+    return uriToPath(uri.trim());
   }
 
   /** A path or file URI (not a web link, not already data). */
   static isLocal(uri: string): boolean {
     const u = uri.trim();
-    return u.startsWith('/') || u.startsWith('file://');
+    return u.startsWith('file:') || path.isAbsolute(u);
   }
 
   /** Forget failed reads (the hub came back: try again). */
@@ -538,7 +531,7 @@ function approvalView(t: ToolCall, step: any): ApprovalView {
     const spec = ri.file_permission ?? {};
     icon = 'file';
     title = spec.is_directory ? 'Open a folder outside the workspace?' : 'Open a file outside the workspace?';
-    target = String(spec.absolute_path_uri ?? '').replace(/^file:\/\//, '') || null;
+    target = uriToPath(String(spec.absolute_path_uri ?? '')) || null;
     always = ALWAYS_CHOICES;
     denyPlaceholder = '';
   } else if (type === 'elicitation') {
@@ -1437,7 +1430,7 @@ export class AgyBackend implements AgentBackend {
    * the hub does not have yet is created as the app creates it.
    */
   private async pointDefaultProject(workspaceUri: string) {
-    const name = path.basename(workspaceUri.replace(/^file:\/\//, ''));
+    const name = baseName(workspaceUri);
     const resources = { resources: [{ folder_uri: workspaceUri }] };
     const raw = await this.callHubRaw('ReadProjects', encodeAs('ReadProjectsRequest', { ids: [DEFAULT_PROJECT_ID] }));
     const projectBytes = rawFields(raw).find((f) => f.id === 1)?.payload; // ReadProjectsResponse.projects = 1

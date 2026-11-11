@@ -141,6 +141,8 @@ export function rules(mode: string, agent: string): { action: string; resource: 
       rule('external_directory', 'ask'),
       // files the app copied for the chat (OpenCode's `*` also matches across folders; last match wins)
       rule('external_directory', 'allow', '*/.antigem/uploads/*'),
+      // Windows paths use backslashes
+      ...(process.platform === 'win32' ? [rule('external_directory', 'allow', '*\\.antigem\\uploads\\*')] : []),
     ];
   return null;
 }

@@ -22,7 +22,9 @@ const tmpDir = path.join(root, '.bin-stash', String(Date.now()));
 fs.mkdirSync(tmpDir, { recursive: true });
 
 const isWin = target.startsWith('win32');
-const wanted = `antigem-bridge-${target}${isWin ? '.exe' : ''}`;
+let wanted = `antigem-bridge-${target}${isWin ? '.exe' : ''}`;
+// Windows on ARM runs the x64 bridge (emulated) when it has no build of its own; the extension falls back to it
+if (target === 'win32-arm64' && !fs.existsSync(path.join(binDir, wanted))) wanted = 'antigem-bridge-win32-x64.exe';
 
 // Sanity: wanted binary must exist.
 if (!fs.existsSync(path.join(binDir, wanted))) {

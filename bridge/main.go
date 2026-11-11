@@ -138,9 +138,10 @@ func formatHumanCrash(p interface{}, rawStack []byte) (reason string, location s
 
 func main() {
 	// Chrome native messaging host of the AntiGem browser extension: stdin/stdout belong to Chrome, so dispatch before
-	// anything else runs or prints
+	// anything else runs or prints. On Windows Chrome starts the bridge itself (no wrapper script adds the flag): its
+	// first argument is then the caller's origin
 	for _, a := range os.Args[1:] {
-		if a == "--native-host" {
+		if a == "--native-host" || strings.HasPrefix(a, "chrome-extension://") {
 			os.Exit(nativehost.Run(nativehost.ParseArgs(os.Args[1:])))
 		}
 	}

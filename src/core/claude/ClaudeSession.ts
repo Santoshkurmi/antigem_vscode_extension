@@ -11,6 +11,7 @@ import type { ChatAttachment, Conversation, QueuedMessage } from '../../../share
 import type { QuestionView } from '../../../shared/protocol';
 import type { ChatState } from '../types';
 import { attachedFilesBlock, cleanTitle, displayUserText, type FileRef } from '../text';
+import { uriToPath } from '../paths';
 import { ClaudeTranscript, questionnaireFrom, withKind } from './ClaudeTranscript';
 import { approvalViews } from './approvals';
 import { contextUsage, limitsOf, providerOf, rawModel, sameLimits, sessionState, str, type BridgeFrame, type ContextUsage, type SpawnConfig } from './protocol';
@@ -374,7 +375,7 @@ export class ClaudeSession {
   private spawnConfig(): SpawnConfig {
     const conv = this.b.conversation(this.id) ?? this.localConversation;
     const uri = conv?.workspaceUri ?? '';
-    const cwd = uri ? decodeURIComponent(uri.replace(/^file:\/\//, '')) : '';
+    const cwd = uri ? uriToPath(uri) : '';
     return {
       cwd: cwd || undefined,
       // always explicit, so the process runs exactly what the controls show ("default" clears an older choice)

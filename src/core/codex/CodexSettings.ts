@@ -336,7 +336,11 @@ export class CodexSettings implements AgentSettingsProvider {
         label: jobRunning ? 'Installing…' : 'Install Codex',
         style: 'primary',
         disabled: jobRunning,
-        description: st.termux_package ? 'Installs the Termux package (pkg install codex).' : "Downloads OpenAI's official Linux build into ~/.local/bin.",
+        description: st.termux_package
+          ? 'Installs the Termux package (pkg install codex).'
+          : process.platform === 'win32'
+            ? 'Not from here on Windows: in a terminal run npm install -g @openai/codex, then restart the bridge.'
+            : `Downloads OpenAI's official ${process.platform === 'darwin' ? 'macOS' : 'Linux'} build into ~/.local/bin.`,
       });
     else if (st.installed) {
       items.push({ kind: 'button', id: 'update', label: jobRunning ? 'Checking…' : 'Check for updates', disabled: jobRunning });

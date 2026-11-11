@@ -201,7 +201,7 @@ Bridge binaries are included for **Linux** (x64, arm64), **macOS** (Intel, Apple
 32-bit systems are not supported.
 
 AntiGem is developed and tested mostly on Linux. The Chrome extension's native connection works on Linux and macOS;
-Windows support is not there yet.
+on Windows it uses a named pipe and the registry, and has not been tested on a Windows PC yet.
 
 ## Known limitations
 

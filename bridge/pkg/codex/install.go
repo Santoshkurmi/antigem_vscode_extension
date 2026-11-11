@@ -22,8 +22,8 @@ import (
 
 // Installing Codex from the app:
 //   - native Termux: the Termux package (`pkg install codex`), a normal Android build kept up to date by Termux;
-//   - elsewhere (Linux, proot Ubuntu): the official static Linux build from the latest GitHub release, checked
-//     against the release's sha256, into ~/.local/bin/codex. A copy managed by Codex's own installer (a link into
+//   - elsewhere (Linux, proot Ubuntu, macOS): the official build (static on Linux) from the latest GitHub release,
+//     checked against the release's sha256, into ~/.local/bin/codex. A copy managed by Codex's own installer (a link into
 //     ~/.codex/packages) is updated with `codex update` instead.
 
 const latestReleaseURL = "https://api.github.com/repos/openai/codex/releases/latest"
@@ -125,6 +125,19 @@ func (m *Manager) afterInstall(j *installJob) {
 }
 
 func releaseTarget() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		switch runtime.GOARCH {
+		case "arm64":
+			return "aarch64-apple-darwin", nil
+		case "amd64":
+			return "x86_64-apple-darwin", nil
+		}
+		return "", fmt.Errorf("Codex has no macOS build for %s", runtime.GOARCH)
+	case "windows":
+		// the Windows release is a zipped .exe, not the tar.gz this installs
+		return "", errors.New("installing Codex from the app is not supported on windows (install it with `npm install -g @openai/codex`, then restart the server)")
+	}
 	switch runtime.GOARCH {
 	case "arm64":
 		return "aarch64-unknown-linux-musl", nil
@@ -283,6 +296,11 @@ func (m *Manager) installRelease(ctx context.Context, j *installJob, update bool
 	if !found {
 		return errors.New("the download has no codex binary")
 	}
+	// the new binary must start before it replaces the installed one
+	if v := m.Version(tmp); v == "" {
+		os.Remove(tmp)
+		return fmt.Errorf("the downloaded Codex does not start on this device (%s is unchanged)", dest)
+	}
 	// a running app-server keeps its (old, now unlinked) binary until it restarts
 	if err := os.Rename(tmp, dest); err != nil {
 		os.Remove(tmp)
@@ -291,9 +309,6 @@ func (m *Manager) installRelease(ctx context.Context, j *installJob, update bool
 	m.verMu.Lock()
 	m.version = ""
 	m.verMu.Unlock()
-	if v := m.Version(dest); v == "" {
-		return fmt.Errorf("installed %s, but it does not start on this device", dest)
-	}
 	m.afterInstall(j)
 	return nil
 }

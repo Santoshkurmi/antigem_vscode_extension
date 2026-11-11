@@ -24,6 +24,7 @@ import { ComposerChip, RangeName, selectionLabel } from './Attachments';
 import { Collapse, Dialog, Icon, type IconName } from '../ui/primitives';
 import { isRunning } from './Feed';
 import { alpha } from '../util/format';
+import { pathBaseName } from '../util/paths';
 import { quotaPillWindow } from '../theme';
 import { openAgentSettings, openSettings, setThemePanelOpen } from '../state/settings';
 import { expandMentions, mentionLabel, mentionToken, shortenMentions, shortMentionText, splitPicked, type Mention } from '../util/mentions';
@@ -61,7 +62,7 @@ export function addComposerAttachments(list: ChatAttachment[]) {
 
 /** A file / folder by path, as a chip (an `@` pick, the active editor's file). */
 export function fileChip(path: string, kind: 'file' | 'folder' = 'file'): ChatAttachment {
-  const name = path.replace(/\/+$/, '').substring(path.replace(/\/+$/, '').lastIndexOf('/') + 1) || path;
+  const name = pathBaseName(path) || path;
   const image = kind === 'file' && /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
   return { id: newId(), name, path, isImage: image, isAudio: false, size: 0, reference: true, kind: image ? 'image' : kind };
 }

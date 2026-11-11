@@ -8,6 +8,7 @@ import { esc } from '../markdown/inline';
 import { Dialog, Icon, IconButton } from '../ui/primitives';
 import { chatWorkspaceUri, copyText, send } from '../state/store';
 import { themeMode } from '../theme';
+import { fileLinkToPath, pathBaseName } from '../util/paths';
 
 const SHELL = new Set(['bash', 'sh', 'shell', 'zsh', 'console', 'shellsession', 'terminal', 'powershell', 'ps1', 'pwsh', 'cmd', 'bat', 'fish']);
 
@@ -316,7 +317,7 @@ export function DiffView(props: { diff: string; path?: string }) {
       <Show when={props.path}>
         <div class="diff-head">
           <Icon name="difference" size={16} color="var(--primary)" />
-          <span class="diff-file">{props.path!.substring(props.path!.lastIndexOf('/') + 1)}</span>
+          <span class="diff-file">{pathBaseName(props.path!)}</span>
           <span class="flex1" />
           <span class="diff-stats">
             <span style={{ color: 'var(--success)' }}>+{adds()}</span> <span style={{ color: 'var(--danger)' }}>-{dels()}</span>
@@ -358,7 +359,7 @@ function RunDialog(props: { command: string; onClose: () => void }) {
     const cmd = value().trim();
     if (!cmd) return;
     const ws = chatWorkspaceUri();
-    send({ type: 'runInTerminal', command: cmd, cwd: ws ? decodeURIComponent(ws.replace(/^file:\/\//, '')) : null });
+    send({ type: 'runInTerminal', command: cmd, cwd: ws ? fileLinkToPath(ws) : null });
     props.onClose();
   };
   return (

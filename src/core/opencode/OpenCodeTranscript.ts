@@ -186,7 +186,7 @@ export class OpenCodeTranscript {
           .filter((x: ChatAttachment | null): x is ChatAttachment => x != null);
         msg.attachmentNames = files
           .filter((f: Json) => !((str(f, 'mime') ?? '').startsWith('image/') && str(f, 'data')))
-          .map((f: Json) => str(f, 'name') ?? str(f, 'uri')?.split('/').pop())
+          .map((f: Json) => str(f, 'name') ?? str(f, 'uri')?.split(/[\\/]/).pop())
           .filter((x: string | undefined): x is string => !!x);
         this.messages.set(id, msg);
         break;
@@ -906,7 +906,7 @@ export function describeTool(name: string, input: Json): string {
   };
   const file = (...keys: string[]) => {
     const p = s(...keys);
-    return p.split('/').pop() || p;
+    return p.split(/[\\/]/).pop() || p;
   };
   let out: string;
   switch (name.toLowerCase()) {

@@ -15,10 +15,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"gemini-server/pkg/procgroup"
 )
 
 const (
@@ -103,12 +106,20 @@ func (m *Manager) ResolveBinary() (string, error) {
 	if p, err := exec.LookPath("claude"); err == nil {
 		candidates = append(candidates, p)
 	}
+	if runtime.GOOS == "windows" {
+		// the native installer's claude.exe (PATH may not have it yet)
+		candidates = append(candidates, filepath.Join(m.HomeDir, ".local", "bin", "claude.exe"))
+	}
 	candidates = append(candidates,
 		filepath.Join(m.HomeDir, ".local", "bin", "claude"),
 		filepath.Join(m.HomeDir, ".claude", "local", "claude"),
 		"/usr/local/bin/claude",
 		"/usr/bin/claude",
 	)
+	if runtime.GOOS == "darwin" {
+		// Homebrew on Apple silicon; an editor started from the Dock often has it missing from PATH
+		candidates = append(candidates, "/opt/homebrew/bin/claude")
+	}
 	for _, c := range candidates {
 		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
 			return c, nil
@@ -432,6 +443,7 @@ func (s *Session) spawnLocked() error {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
+	procgroup.HideConsole(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -627,6 +639,11 @@ func (s *Session) Kill() {
 		_ = stdin.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
+		if runtime.GOOS == "windows" {
+			// no Interrupt there, and when claude is npm's claude.cmd only cmd.exe would die: kill the whole tree
+			procgroup.Terminate(cmd.Process.Pid, true)
+			return
+		}
 		_ = cmd.Process.Signal(os.Interrupt)
 		go func() {
 			time.Sleep(3 * time.Second)

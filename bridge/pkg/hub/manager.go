@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,18 +81,19 @@ type HubManager struct {
 // FindAllAgyBinaries discovers all existing AGY binaries in candidate paths and PATH.
 func FindAllAgyBinaries() []string {
 	home, _ := os.UserHomeDir()
+	agyName := agyFileName()
 	var rawCandidates []string
 	if home != "" {
 		rawCandidates = append(rawCandidates,
-			filepath.Join(home, ".local", "bin", "agy"),
-			filepath.Join(home, ".gemini", "bin", "agy"),
-			filepath.Join(home, ".antigravity", "bin", "agy"),
-			filepath.Join(home, "usr", "bin", "agy"),
-			filepath.Join(home, "..", "usr", "bin", "agy"),
+			filepath.Join(home, ".local", "bin", agyName),
+			filepath.Join(home, ".gemini", "bin", agyName),
+			filepath.Join(home, ".antigravity", "bin", agyName),
+			filepath.Join(home, "usr", "bin", agyName),
+			filepath.Join(home, "..", "usr", "bin", agyName),
 		)
 	}
 	if prefix := os.Getenv("PREFIX"); prefix != "" {
-		rawCandidates = append(rawCandidates, filepath.Join(prefix, "bin", "agy"))
+		rawCandidates = append(rawCandidates, filepath.Join(prefix, "bin", agyName))
 	}
 	if p := config.SafeLookPath("agy"); p != "" {
 		rawCandidates = append(rawCandidates, p)
@@ -182,7 +184,15 @@ func ExpandAgyPath(p string) string {
 // InstallerAgyPath is where Google's installer (antigravity.google/cli/install.sh) puts agy: ~/.local/bin/agy.
 func InstallerAgyPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "bin", "agy")
+	return filepath.Join(home, ".local", "bin", agyFileName())
+}
+
+// agyFileName is agy's file name on this OS (agy.exe on Windows).
+func agyFileName() string {
+	if runtime.GOOS == "windows" {
+		return "agy.exe"
+	}
+	return "agy"
 }
 
 // ResolveAgyBinary is the default non-interactive fallback.
@@ -516,8 +526,14 @@ func (m *HubManager) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
-	shArgs := append([]string{"-c", `exec "$0" "$@"`, m.AgyBinPath}, args...)
-	cmd := exec.CommandContext(ctx, "sh", shArgs...)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// no sh on Windows: agy is started directly
+		cmd = exec.CommandContext(ctx, m.AgyBinPath, args...)
+	} else {
+		shArgs := append([]string{"-c", `exec "$0" "$@"`, m.AgyBinPath}, args...)
+		cmd = exec.CommandContext(ctx, "sh", shArgs...)
+	}
 	procgroup.Setup(cmd)
 
 	// Set required environment variables for agy hub mode dynamically across all platforms
@@ -529,10 +545,17 @@ func (m *HubManager) Start() error {
 		usrBin = filepath.Join(prefix, "bin")
 	}
 
+	pathEnv := "PATH=" + geminiBin + ":" + localBin + ":" + usrBin + ":/usr/local/bin:/usr/bin:/bin:/system/bin:/system/xbin:" + os.Getenv("PATH")
+	if runtime.GOOS == "windows" {
+		// ';' between folders and none of the Unix ones; exec matches env keys case-insensitively there, so this
+		// replaces the inherited `Path`
+		pathEnv = "PATH=" + strings.Join([]string{geminiBin, localBin, os.Getenv("PATH")}, string(os.PathListSeparator))
+	}
+
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
 		"USERPROFILE="+home,
-		"PATH="+geminiBin+":"+localBin+":"+usrBin+":/usr/local/bin:/usr/bin:/bin:/system/bin:/system/xbin:"+os.Getenv("PATH"),
+		pathEnv,
 		"AGY_ENABLE_HUB=1",
 		"ANTIGRAVITY_VSCODE_HOST=1",
 		"ANTIGRAVITY_AUTH_SUCCESS_APP=vscode",
@@ -678,7 +701,12 @@ func (m *HubManager) Stop() {
 	}
 
 	if cancel != nil {
-		cancel()
+		if runtime.GOOS == "windows" {
+			// cancel kills agy alone, after which taskkill /T no longer finds its children: the tree goes first
+			defer cancel()
+		} else {
+			cancel()
+		}
 	}
 
 	if cmd != nil && cmd.Process != nil {

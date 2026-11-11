@@ -5,6 +5,7 @@ import type { ChatAttachment } from '@shared/model';
 import { readImage, send } from '../state/store';
 import { Icon, type IconName } from '../ui/primitives';
 import { openImageViewer } from './Media';
+import { fileLinkToPath } from '../util/paths';
 
 export type AttKind = 'image' | 'selection' | 'folder' | 'file' | 'audio';
 
@@ -18,7 +19,7 @@ export function attKind(a: ChatAttachment): AttKind {
   return 'file';
 }
 
-const pathOf = (a: ChatAttachment) => (a.path || a.localUri || '').replace(/^file:\/\//, '');
+const pathOf = (a: ChatAttachment) => fileLinkToPath(a.path || a.localUri || '');
 
 /** A src the webview can show right away (base64, http, data:), else null. */
 export function directImageSrc(a: ChatAttachment): string | null {

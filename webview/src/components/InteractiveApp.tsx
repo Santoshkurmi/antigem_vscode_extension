@@ -9,6 +9,7 @@ import { Portal } from 'solid-js/web';
 import { mediaUrl, send } from '../state/store';
 import { Icon, IconButton, nextFrame } from '../ui/primitives';
 import { CodeBlock } from './CodeBlock';
+import { fileLinkToPath } from '../util/paths';
 
 const DIM = 'color-mix(in srgb, var(--on-surface) 70%, transparent)';
 // allow-same-origin: the app keeps the preview server's origin (not the webview's), so its storage works
@@ -54,7 +55,7 @@ export function InteractiveAppBlock(props: { code: string; title?: string }) {
   const [error, setError] = createSignal<string | null>(null);
   const filePath = createMemo(() => {
     const c = props.code.trim();
-    return !c.includes('\n') && FILE_LINE.test(c) ? c.replace(/^file:\/\//, '') : null;
+    return !c.includes('\n') && FILE_LINE.test(c) ? fileLinkToPath(c) : null;
   });
   const title = () => props.title?.trim() || (filePath() ? filePath()!.split(/[\\/]/).pop()! : 'Interactive App');
 

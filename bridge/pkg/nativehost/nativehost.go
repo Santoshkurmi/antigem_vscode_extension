@@ -5,10 +5,10 @@
 // uint32 length (native byte order = little-endian on every supported platform) followed by that many bytes of JSON.
 // Messages to Chrome may be at most 1 MB, messages from Chrome up to 4 GB.
 //
-// The host relays those messages to the AntiGem VS Code extension over a per-user Unix socket (newline-delimited JSON):
-// the VS Code window that serves the built-in MCP port listens on it, this host connects. No TCP port is ever opened,
-// so neither web pages nor other users can reach the browser. Lines from VS Code that are larger than Chrome's limit
-// are split into base64 "chunk" messages the extension puts back together.
+// The host relays those messages to the AntiGem VS Code extension over a per-user Unix socket, or on Windows a named
+// pipe (newline-delimited JSON): the VS Code window that serves the built-in MCP port listens on it, this host
+// connects. No TCP port is ever opened, so neither web pages nor other users can reach the browser. Lines from VS Code
+// that are larger than Chrome's limit are split into base64 "chunk" messages the extension puts back together.
 package nativehost
 
 import (
@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"strings"
 	"sync"
@@ -199,7 +198,7 @@ func Run(o Options) int {
 	}()
 
 	var mu sync.Mutex
-	var conn net.Conn
+	var conn io.ReadWriteCloser
 	done := make(chan struct{})
 	status := func(connected bool, socket, why string) {
 		m := map[string]any{"type": "host_status", "connected": connected, "version": Version, "pid": os.Getpid()}

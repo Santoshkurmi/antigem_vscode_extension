@@ -6,11 +6,10 @@ import type { ProjectView } from '@shared/protocol';
 import { chooseProject, newChatProjectUri, pickFolder, requestProjects, send, showToast } from '../state/store';
 import { Icon, IconButton, nextFrame } from '../ui/primitives';
 import { alpha, relativeTime } from '../util/format';
+import { pathBaseName, samePath } from '../util/paths';
 
 export const [projectPickerOpen, setProjectPickerOpen] = createSignal(false);
 
-const samePath = (a: string | null | undefined, b: string | null | undefined) =>
-  !!a && !!b && a.replace(/^file:\/\//, '').replace(/\/+$/, '') === b.replace(/^file:\/\//, '').replace(/\/+$/, '');
 
 export function ProjectPicker() {
   const [mounted, setMounted] = createSignal(false);
@@ -96,7 +95,7 @@ export function ProjectPicker() {
                   <ProjectRow
                     selected={samePath(active(), p.uri)}
                     current
-                    name={`Current folder · ${p.name || p.path.substring(p.path.lastIndexOf('/') + 1)}`}
+                    name={`Current folder · ${p.name || pathBaseName(p.path)}`}
                     detail={p.path}
                     meta={[p.chats ? `${p.chats} chat${p.chats === 1 ? '' : 's'}` : null, p.lastUsed ? relativeTime(p.lastUsed) : null].filter(Boolean).join(' · ')}
                     onClick={() => pick(p.uri)}
@@ -115,7 +114,7 @@ export function ProjectPicker() {
                   {(p) => (
                     <ProjectRow
                       selected={samePath(active(), p.uri)}
-                      name={p.name || p.path.substring(p.path.lastIndexOf('/') + 1) || 'Workspace'}
+                      name={p.name || pathBaseName(p.path) || 'Workspace'}
                       detail={p.path}
                       meta={[
                         p.chats ? `${p.chats} chat${p.chats === 1 ? '' : 's'}` : null,

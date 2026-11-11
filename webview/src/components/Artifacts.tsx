@@ -7,6 +7,7 @@ import type { ArtifactSnapshot } from '@shared/model';
 import { readImage, send, state } from '../state/store';
 import { openImageViewer } from './Media';
 import { Icon, IconButton, nextFrame, type IconName } from '../ui/primitives';
+import { fileLinkToPath, pathBaseName } from '../util/paths';
 
 export const [artifactsOpen, setArtifactsOpen] = createSignal(false);
 
@@ -14,8 +15,8 @@ const isImage = (a: ArtifactSnapshot) => {
   const s = `${a.name} ${a.absoluteUri}`.toLowerCase();
   return /\.(png|jpe?g|webp|gif|bmp)$/.test(s) || /\.(png|jpe?g)\?/.test(s);
 };
-const pathOf = (a: ArtifactSnapshot) => decodeURIComponent((a.absoluteUri || a.name).replace(/^file:\/\//, ''));
-const baseName = (s: string) => s.substring(s.lastIndexOf('/') + 1);
+const pathOf = (a: ArtifactSnapshot) => fileLinkToPath(a.absoluteUri || a.name);
+const baseName = pathBaseName;
 
 function kindOf(a: ArtifactSnapshot): { title: string; icon: IconName; tint: string } {
   const has = (w: string) => a.name.toLowerCase().includes(w) || a.absoluteUri.toLowerCase().includes(w);

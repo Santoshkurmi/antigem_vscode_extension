@@ -92,3 +92,84 @@ expansion in the composer; skills served as MCP (`get_skills`, `get_skill`, `get
 `/mcp?extension=<id>`; plugin tools run in the app's Node plugin runtime (`assets/browser-runtime/*.mjs`) with its
 browser API backed by the Chrome extension where possible. Settings pages = the app's Plugins screen (Installed /
 Repositories / Store).
+
+## Phase 6 — Windows and macOS (audit 2026-11-11, code reading only; nothing tested on those systems yet)
+
+macOS mostly works; Windows is not usable yet. Items marked (likely) were not fully confirmed.
+
+**Status 2026-11-11:** 6.1 and 6.2 done in code (shared helper `src/core/paths.ts`; bridge: `procgroup.HideConsole`,
+`config.PrependPath`, Windows/macOS branches), plus the 6.3 basenames, PowerShell command unwrapping and per-OS
+install hints. Bridge compiles for windows/darwin/linux; nothing run on Windows or macOS yet — needs real-machine
+testing. Not done (by choice): browser control on Windows, the phone-app-only endpoints (`fsProtected`,
+`fsValidName`, `fsMove`, zip import, drive letters), the macOS Chrome picker hint, the unused `/api/system-prompt`
+saying "linux / bash", OpenCode install on Windows (npm hint instead), agy install on Windows (link instead).
+
+**Review 2026-11-11:** the webview still cut `file://` off by hand (images, artifacts, attachments, tool images, HTML
+apps, "run in terminal" folder, project picker's current-folder match, file names) → `webview/src/util/paths.ts`
+(`fileLinkToPath`, `pathBaseName`, `samePath`); host `uriToPath` also takes a cut-off `/C:/…`. Chat markdown opens
+Windows paths (`C:\…` / `c:/…` in links and inline code, `file:///C:/…`, `%20`). ffprobe/ffmpeg for plugins without a
+console window. A bridge is only replaced by a newer program (two windows on different versions no longer swap it back
+and forth). Still open: macOS notification clicks (AppleScript cannot open a link; needs a helper app).
+
+**Browser control on Windows, 2026-11-11** (6.3 item; built, tested only on Linux with a simulated Windows pipe):
+- the extension host listens on `\\.\pipe\antigem-browser-<random>` and writes the name to `~/.antigem/run/browser.pipe`;
+- the native host (`nativehost/socket_windows.go`) reads that file on every try and opens the pipe for overlapped I/O,
+  using only the standard library;
+- registration writes one manifest naming the bridge `.exe` (Chrome's `chrome-extension://` argument starts
+  native-host mode), plus `HKCU\Software\<browser>\NativeMessagingHosts\…` keys written with `reg.exe`;
+- the upload tool's key-folder check also works with `\` and Windows' credential folders;
+- macOS: the *Load unpacked* step says Cmd+Shift+. shows the hidden `.antigem` folder.
+
+Still to check on a real Windows PC: which registry key Chrome Beta / Dev / Canary, Brave and Vivaldi read (both their
+own and Chrome's are written).
+
+### 6.1 Windows core (makes it usable)
+- One shared file-link ↔ path helper (`url.fileURLToPath` / `pathToFileURL`, `path.isAbsolute`) used everywhere.
+  Today `file:///c%3A/...` becomes `/c:/...` and `file://${path}` is built by hand:
+  - host: `host.ts` `pathOf` / readImage / saveArtifact / drop handling / projects, `extension.ts` workspaceFolders,
+    `preview/server.ts`, `jarvis/mcp.ts`, `jarvis/tasks.ts`;
+  - backends: `ClaudeSession.ts` spawnConfig, `ClaudeBackend.ts` cwd → URI, `CodexBackend.ts` `pathOfUri` and
+    thread URIs, `OpenCodeBackend.ts` directory and URIs, `AgyBackend.ts` `toFileUri` / `pathOf` / `HubMedia.isLocal`,
+    `AgySettings.ts` SKILL.md open.
+  Effects: Claude/Codex/OpenCode run in the wrong folder, duplicate projects in the chat list, drag-and-drop does
+  nothing, folders with spaces or `%` break on every OS.
+- `CodexBackend.buildInput`: `a.path.startsWith('/')` drops every file/folder attachment on Windows → `path.isAbsolute`.
+- Bridge `pkg/hub/manager.go`: agy started through `sh -c` (no sh on Windows) → run it directly; PATH built with `:` and
+  Unix dirs → `os.PathListSeparator`, replace the `Path` key case-insensitively.
+- Bridge agy discovery (`hub/manager.go` FindAllAgyBinaries, `config.go` SafeLookPath, InstallerAgyPath): only looks
+  for `agy` → also `agy.exe` / `exec.LookPath`.
+- Bridge `claude/manager.go`: fallback `~/.local/bin/claude` without `.exe`.
+- Console windows (likely): `BridgeManager.ts` spawn without `windowsHide`; agents spawned by the bridge without
+  `HideWindow` / `CREATE_NO_WINDOW`.
+- Claude stop (likely): Interrupt unsupported on Windows (always waits 3 s), `claude.cmd` → only cmd.exe killed →
+  procgroup + taskkill /T. Hub `Stop()`: call `procgroup.Terminate` before `cancel()`.
+
+### 6.2 Feature fixes
+- `codex/install.go` `releaseTarget()` always Linux musl → per-OS target (or refuse like opencode); check the binary
+  before replacing `~/.local/bin/codex`.
+- Claude / agy install via `bash -lc "curl | bash"` (fails or installs into WSL) → PowerShell installer on Windows, or
+  hide the button.
+- `/api/search` (Jarvis): rg output split on `:` breaks on `C:\` → `rg --json` or `--null`; add `--` before the query.
+- macOS: Claude voice reads `~/.claude/.credentials.json` only → Keychain fallback (`security find-generic-password -s
+  "Claude Code-credentials" -w`).
+- macOS: sandbox check only knows bubblewrap → `sandbox-exec` on darwin; "not supported" on Windows.
+- `mcp/server.ts` start promise never settles on errors other than EADDRINUSE (reserved ports on Hyper-V/WSL/Docker
+  PCs → EACCES) → resolve false + "port reserved, change antigem.mcpPort"; same for the bridge ports.
+- Windows on ARM: no `win32-arm64` bridge → fall back to the x64 exe (or build arm64).
+- Bridge from an older extension keeps running after an update (`BridgeManager.doStart` reuses any healthy bridge;
+  on Windows it also locks the old folder) → compare versions, restart.
+- Bridge binary loses +x if a darwin VSIX is packaged on Windows → `chmod 0755` before spawning (non-win32).
+- `HOME` used instead of `os.homedir()`: `host.ts` agy history counts, `~` shortening/expansion, `jarvis/mcp.ts`.
+- Notes / plugin host `rename` over an open file → EPERM on Windows → short retry.
+- OpenCode allow rule `*/.antigem/uploads/*` uses `/` → add the `\` form on win32.
+- Notifications: `xdg-open` only on Linux (skip elsewhere); macOS notification clicks do not open the chat.
+
+### 6.3 Cosmetic / phone-app-only
+- Basenames via `split('/')` show full Windows paths (`text.ts`, transcripts, `host.ts`, `jarvis/controller.ts`,
+  webview `format.ts` `workspaceName`); case-insensitive / NFC project grouping on macOS and Windows.
+- Codex commands shown wrapped in `powershell.exe -Command` (`CodexTranscript.unwrapShell`).
+- Install hints (`curl | bash`, `~/.local/bin`) wrong on Windows.
+- Phone-app-only bridge endpoints: git service through `sh -c`, zip import `\` names, `fsMove` across drives,
+  `fsProtected` / `fsValidName` per-OS rules, drive letters in `/api/fs/roots`.
+- Browser control on Windows (by design off today): registry keys, `.bat` host, named pipe, no chmod/getuid.
+- macOS: Chrome "Load unpacked" picker hides `~/.antigem/chrome-extension` (Cmd+Shift+.).

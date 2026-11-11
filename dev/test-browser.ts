@@ -198,20 +198,20 @@ async function testNativeHost() {
 
 // ------------------------------------------------------------------------------------------------ registration
 
-function testRegistration() {
+async function testRegistration() {
   const dirs = [path.join(tmp, 'chrome', 'NativeMessagingHosts'), path.join(tmp, 'brave', 'NativeMessagingHosts')];
   const wrapper = path.join(tmp, 'wrapper', 'antigem-native-host');
   const fakeBin = path.join(tmp, "bin dir's", 'antigem-bridge');
   fs.mkdirSync(path.dirname(fakeBin), { recursive: true });
   fs.writeFileSync(fakeBin, '#!/bin/sh\n', { mode: 0o755 });
-  const r = register({ binPath: fakeBin, dirs, wrapper, socketPath: '/tmp/x y.sock' });
+  const r = await register({ binPath: fakeBin, dirs, wrapper, socketPath: '/tmp/x y.sock' });
   check('manifests written', r.written.length === 2 && r.written.every((f) => fs.existsSync(f)));
   const m = JSON.parse(fs.readFileSync(path.join(dirs[0], `${HOST_NAME}.json`), 'utf8'));
   check('manifest content', m.name === HOST_NAME && m.type === 'stdio' && m.path === wrapper && m.allowed_origins?.[0] === `chrome-extension://${EXTENSION_ID}/`, JSON.stringify(m));
   const w = fs.readFileSync(wrapper, 'utf8');
   check('wrapper is executable', (fs.statSync(wrapper).mode & 0o111) !== 0);
   check('wrapper quotes paths', w.includes(`exec '${tmp}/bin dir'\\''s/antigem-bridge' --native-host --socket '/tmp/x y.sock' "$@"`), w);
-  const s = registrationStatus(fakeBin, wrapper);
+  const s = await registrationStatus(fakeBin, wrapper);
   check('status reads the wrapper target', s.wrapperExists && s.wrapperCurrent && s.wrapperTarget === fakeBin, JSON.stringify(s));
 }
 
@@ -382,7 +382,7 @@ async function testMcp() {
 
 async function main() {
   testKeys();
-  testRegistration();
+  await testRegistration();
   await testNativeHost();
   await testMcp();
   fs.rmSync(tmp, { recursive: true, force: true });

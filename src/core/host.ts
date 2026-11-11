@@ -2,11 +2,13 @@
 // agent backends and sends each view only what changed in the chat it shows.
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import type { AgentKind, ChatAttachment, ChatMessage, Conversation } from '../../shared/model';
 import type { ChatPatch, ChatSearchHit, EditorContextView, FileSuggestion, HostToView, ProjectView, SettingItem, SettingsPage, SettingsSection, UiPrefs, ViewToHost, WorkspaceFolder } from '../../shared/protocol';
 import path from 'node:path';
 import { HostSettings } from './settings';
 import { ChatNotifier, type ChatAlert } from './notifications';
+import { absPath, baseName, expandHome, folderKey, pathToUri, tildePath, uriToPath } from './paths';
 import type { NotesStore } from './mcp/notes';
 import type { JarvisHooks, JarvisHostApi } from './jarvis/types';
 import type { BrowserHooks } from './browser/settings';
@@ -518,7 +520,7 @@ export class AppHost {
 
   /** Antigravity → Chat history: which ~/.gemini/<folder> the hub reads and writes. */
   private agyHistorySection(): SettingsSection {
-    const home = process.env.HOME ?? '';
+    const home = os.homedir();
     const count = (name: string) => {
       try {
         return fs.readdirSync(path.join(home, '.gemini', name, 'conversations')).filter((f) => !f.startsWith('.')).length;
@@ -554,8 +556,7 @@ export class AppHost {
     const labels: Record<AgentKind, string> = { AGY: 'Antigravity CLI path (agy)', CLAUDE: 'Claude Code CLI path (claude)', CODEX: 'Codex CLI path (codex)', OPENCODE: 'OpenCode CLI path (opencode)' };
     const custom = this.store.get<Partial<Record<AgentKind, string>>>('cli.paths') ?? {};
     const found = await this.platform.cliStatus().catch(() => ({}) as Awaited<ReturnType<Platform['cliStatus']>>);
-    const home = process.env.HOME ?? '';
-    const tilde = (p: string) => (home && p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+    const tilde = tildePath;
     const items: SettingItem[] = AppHost.ALL.filter((k) => this.backends[k] && this.isEnabled(k)).map((k) => {
       const f = found[k];
       const detected = f?.installed && f.path ? tilde(f.path) : '';
@@ -624,35 +625,36 @@ export class AppHost {
 
   /** Project picker: this window's folders, the saved projects, and folders recent chats ran in. */
   private async projects(): Promise<ProjectView[]> {
-    const pathOf = (uri: string) => decodeURIComponent(uri.replace(/^file:\/\//, '')).replace(/\/+$/, '');
-    const stats = new Map<string, { lastUsed: number; chats: number }>();
+    // one entry per folder, however its link or path is written (file:///c%3A/… from VS Code, C:\… from an agent)
+    const stats = new Map<string, { path: string; lastUsed: number; chats: number }>();
     for (const c of this.allConversations()) {
       if (!c.workspaceUri) continue;
-      const p = pathOf(c.workspaceUri);
-      const s = stats.get(p) ?? { lastUsed: 0, chats: 0 };
+      const key = folderKey(c.workspaceUri);
+      const s = stats.get(key) ?? { path: uriToPath(c.workspaceUri), lastUsed: 0, chats: 0 };
       s.lastUsed = Math.max(s.lastUsed, c.updatedAt);
       s.chats++;
-      stats.set(p, s);
+      stats.set(key, s);
     }
     const out = new Map<string, ProjectView>();
-    const add = (path: string, name: string, source: ProjectView['source']) => {
-      const clean = path.replace(/\/+$/, '') || '/';
-      if (out.has(clean)) return;
-      const s = stats.get(clean);
-      out.set(clean, { name, path: clean, uri: `file://${clean}`, source, lastUsed: s?.lastUsed ?? null, chats: s?.chats ?? 0 });
+    const add = (p: string, name: string, source: ProjectView['source']) => {
+      const clean = uriToPath(p).replace(/(?<=.)[\\/]+$/, '');
+      const key = folderKey(clean);
+      if (out.has(key)) return;
+      const s = stats.get(key);
+      out.set(key, { name, path: clean, uri: pathToUri(clean), source, lastUsed: s?.lastUsed ?? null, chats: s?.chats ?? 0 });
     };
     for (const f of this.platform.workspaceFolders()) add(f.path, f.name, 'workspace');
     const saved = await this.platform.savedProjects().catch(() => []);
     for (const p of saved) add(p.path, p.name, 'saved');
     // folders chats ran in, when they exist on this machine (a chat started on the phone has a phone path)
-    for (const [p] of [...stats].sort((a, b) => b[1].lastUsed - a[1].lastUsed)) {
+    for (const { path: p } of [...stats.values()].sort((a, b) => b.lastUsed - a.lastUsed)) {
       let isDir = false;
       try {
         isDir = fs.statSync(p).isDirectory();
       } catch {
         isDir = false;
       }
-      if (isDir) add(p, p.split('/').filter(Boolean).pop() ?? p, 'recent');
+      if (isDir) add(p, baseName(p), 'recent');
     }
     const rank = { workspace: 0, saved: 1, recent: 2 } as const;
     return [...out.values()].sort((a, b) => rank[a.source] - rank[b.source] || (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
@@ -993,7 +995,7 @@ export class AppHost {
         }
         if (msg.id.startsWith('cli.path.')) {
           const kind = msg.id.slice('cli.path.'.length) as AgentKind;
-          const value = String(msg.value ?? '').trim().replace(/^~(?=\/)/, process.env.HOME ?? '~');
+          const value = expandHome(String(msg.value ?? '').trim());
           // the detected path itself = keep auto-detect
           const detected = (await this.platform.cliStatus().catch(() => ({}) as Awaited<ReturnType<Platform['cliStatus']>>))[kind]?.path ?? '';
           if (value && value === detected) {
@@ -1130,7 +1132,7 @@ export class AppHost {
       case 'readImage': {
         let dataUrl: string | null = null;
         try {
-          const p = msg.path.replace(/^file:\/\//, '');
+          const p = uriToPath(msg.path);
           const st = fs.statSync(p);
           const mime = IMAGE_MIME[path.extname(p).slice(1).toLowerCase()];
           if (mime && st.size <= 8 * 1024 * 1024) dataUrl = `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
@@ -1168,7 +1170,7 @@ export class AppHost {
           .filter(Boolean)
           .map((u) => {
             try {
-              return u.startsWith('file:') ? decodeURIComponent(new URL(u).pathname) : u.startsWith('/') ? u : null;
+              return absPath(u);
             } catch {
               return null;
             }
@@ -1193,7 +1195,7 @@ export class AppHost {
         this.platform.revealRange(msg.path, msg.startLine, msg.endLine);
         return;
       case 'saveArtifact':
-        await this.platform.saveCopy(msg.path.replace(/^file:\/\//, ''));
+        await this.platform.saveCopy(uriToPath(msg.path));
         return;
       case 'downloadUrl':
         if (!/^https?:\/\//i.test(msg.url)) throw new Error('Only web addresses can be downloaded');
@@ -1247,7 +1249,7 @@ export class AppHost {
       case 'pickFolder': {
         const p = await this.platform.pickFolder();
         if (p) await this.platform.saveProject(p).catch(() => undefined);
-        const project: ProjectView | null = p ? { name: p.split('/').filter(Boolean).pop() ?? p, uri: `file://${p}`, path: p, source: 'saved' } : null;
+        const project: ProjectView | null = p ? { name: baseName(p), uri: pathToUri(p), path: p, source: 'saved' } : null;
         v.port.post({ type: 'folderPicked', reqId: msg.reqId, project });
         return;
       }

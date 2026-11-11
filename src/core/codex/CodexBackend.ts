@@ -20,6 +20,7 @@ import type { AgentStatus, ApprovalView, ControlChipView, ModelsState, QuestionV
 import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest } from '../types';
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { attachedFilesBlock, cleanTitle, collapseExpansions, displayUserText, extractAttachedFiles, type FileRef } from '../text';
+import { absPath, pathToUri } from '../paths';
 import { CodexClient, CodexRpcError, CodexUnavailableError, type CodexCliJob, type CodexStatus } from './client';
 import { CodexTranscript, safeId, unwrapShell, type CodexQuestion } from './CodexTranscript';
 import { CodexSettings } from './CodexSettings';
@@ -121,11 +122,8 @@ const APP_ONLY: Record<string, string> = {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const textInput = (text: string): J => ({ type: 'text', text, text_elements: [] });
-const pathOfUri = (uri: string | null | undefined): string | null => {
-  if (!uri) return null;
-  const p = decodeURIComponent(uri.replace(/^file:\/\//, ''));
-  return p.startsWith('/') ? p : null;
-};
+/** A chat's folder (`file:` link or path) as an absolute path of this OS, else null. */
+const pathOfUri = (uri: string | null | undefined): string | null => absPath(uri);
 
 // ------------------------------------------------------------------------------------------------ session
 
@@ -951,7 +949,7 @@ export class CodexBackend implements AgentBackend {
       hasActivity: false,
       runStatus: isRunning ? 'RUNNING' : 'IDLE',
       stepCount: 0,
-      workspaceUri: cwd ? `file://${cwd}` : '',
+      workspaceUri: cwd ? pathToUri(cwd) : '',
       nestingDepth: 0,
       agent: 'CODEX',
       archived,
@@ -1283,7 +1281,7 @@ export class CodexBackend implements AgentBackend {
         hasActivity: true,
         runStatus: 'RUNNING',
         stepCount: 0,
-        workspaceUri: workspace ? `file://${workspace}` : '',
+        workspaceUri: workspace ? pathToUri(workspace) : '',
         nestingDepth: 0,
         agent: 'CODEX',
         archived: false,
@@ -1357,7 +1355,7 @@ export class CodexBackend implements AgentBackend {
         hasActivity: false,
         runStatus: 'IDLE',
         stepCount: 0,
-        workspaceUri: workspace ? `file://${workspace}` : '',
+        workspaceUri: workspace ? pathToUri(workspace) : '',
         nestingDepth: 0,
         agent: 'CODEX',
         archived: false,
@@ -1385,7 +1383,7 @@ export class CodexBackend implements AgentBackend {
     const images: ChatAttachment[] = [];
     const refs: FileRef[] = [];
     for (const a of atts) {
-      const onDisk = !!a.path && a.path.startsWith('/') && fs.existsSync(a.path);
+      const onDisk = !!a.path && path.isAbsolute(a.path) && fs.existsSync(a.path);
       if (a.isImage && a.base64) {
         inputs.push({ type: 'image', url: `data:${a.mimeType || 'image/png'};base64,${a.base64}` });
         images.push(a);

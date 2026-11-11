@@ -976,8 +976,12 @@ function planKey(turnId: string): string {
 
 /** `/bin/bash -lc "cmd"` → `cmd`. */
 export function unwrapShell(command: string): string {
-  const m = /^\S*(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(command.trim());
-  return m ? m[2] : command;
+  const t = command.trim();
+  const m = /^\S*(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(t);
+  if (m) return m[2];
+  // Windows: `"C:\…\powershell.exe" -Command "…"` (pwsh too, maybe -NoProfile / -NoLogo first)
+  const w = /^(?:"[^"]*?(?:powershell|pwsh)(?:\.exe)?"|\S*?(?:powershell|pwsh)(?:\.exe)?)(?:\s+-(?:NoProfile|NoLogo|NonInteractive))*\s+-(?:Command|c)\s+(['"]?)([\s\S]*)\1$/i.exec(t);
+  return w ? w[2] : command;
 }
 
 /** One file change as the edit card shows it: added lines "+", removed "-", hunks "@@ … @@". */

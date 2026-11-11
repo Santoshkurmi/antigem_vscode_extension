@@ -33,6 +33,8 @@ const kindOf = (v: unknown): NoteKind | null => {
 export class NotesStore {
   private notes: Note[] = [];
   private saveTimer: NodeJS.Timeout | null = null;
+  /** Failed saves in a row (Windows refuses to replace a file another program has open for a moment). */
+  private saveFailures = 0;
   private listeners = new Set<(notes: Note[]) => void>();
   readonly file: string;
 
@@ -111,8 +113,13 @@ export class NotesStore {
       const tmp = `${this.file}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify({ version: 1, notes: this.notes.map((n) => NotesStore.toJson(n)) }));
       fs.renameSync(tmp, this.file);
+      this.saveFailures = 0;
     } catch {
-      /* next change retries */
+      // try again shortly (and with the next change); give up after a few tries in a row
+      if (++this.saveFailures <= 5) {
+        if (this.saveTimer) clearTimeout(this.saveTimer);
+        this.saveTimer = setTimeout(() => this.saveNow(), 1000 * this.saveFailures);
+      }
     }
   }
 

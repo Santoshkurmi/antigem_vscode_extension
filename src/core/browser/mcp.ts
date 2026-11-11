@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { McpContent, McpResult, McpServerDef } from '../mcp/server';
 import { BrowserError, NOT_CONNECTED, type BrowserBridge } from './bridge';
 import * as K from './keys';
+import { expandHome } from '../paths';
 import { ALIASES, HIDDEN_TOOLS, INSTRUCTIONS, TOOLS } from './tools';
 
 type Args = Record<string, unknown>;
@@ -128,7 +129,23 @@ const MIME: Record<string, string> = {
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', js: 'text/javascript', css: 'text/css',
 };
 /** Folders whose files never go to a web page (keys, credentials, the bridge token). */
-const SECRET_DIRS = ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.antigem_bridge', '.config/gcloud', '.password-store', '.local/share/keyrings'];
+const SECRET_DIRS = [
+  '.ssh',
+  '.gnupg',
+  '.aws',
+  '.azure',
+  '.kube',
+  '.docker',
+  '.antigem_bridge',
+  '.config/gcloud',
+  '.password-store',
+  '.local/share/keyrings',
+  // Windows: gcloud's folder there, the Credential Manager's files and the DPAPI master keys
+  'AppData/Roaming/gcloud',
+  'AppData/Roaming/Microsoft/Credentials',
+  'AppData/Local/Microsoft/Credentials',
+  'AppData/Roaming/Microsoft/Protect',
+];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const str = (v: unknown) => (v === undefined || v === null ? '' : String(v));
@@ -996,7 +1013,8 @@ export class BrowserTools {
     if (paths.length < 1 || paths.length > 20) throw new ToolError('Pass 1–20 file paths');
     const home = os.homedir();
     return paths.map((p) => {
-      const raw = p === '~' || p.startsWith('~/') ? path.join(home, p.slice(1)) : path.isAbsolute(p) ? p : path.join(this.opts.workspace(), p);
+      const expanded = expandHome(p);
+      const raw = path.isAbsolute(expanded) ? expanded : path.join(this.opts.workspace(), p);
       let real: string;
       try {
         real = fs.realpathSync(raw);
@@ -1005,8 +1023,11 @@ export class BrowserTools {
       }
       const st = fs.statSync(real);
       if (!st.isFile()) throw new ToolError(`Not a file: ${p}`);
-      const rel = path.relative(home, real);
-      if (!rel.startsWith('..') && SECRET_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`))) throw new ToolError(`Refusing to upload ${p}: it is in ~/${rel.split('/')[0]}, which holds keys or credentials.`);
+      // `/` separators (Windows gives `.ssh\id_rsa`), and no case on Windows / macOS (`.SSH` is the same folder there)
+      const fold = (s: string) => (process.platform === 'win32' || process.platform === 'darwin' ? s.toLowerCase() : s);
+      const rel = fold(path.relative(home, real).split(path.sep).join('/'));
+      const secret = !rel.startsWith('..') && !path.isAbsolute(rel) ? SECRET_DIRS.find((d) => rel === fold(d) || rel.startsWith(`${fold(d)}/`)) : undefined;
+      if (secret) throw new ToolError(`Refusing to upload ${p}: it is in ~/${secret}, which holds keys or credentials.`);
       const ext = path.extname(real).slice(1).toLowerCase();
       return { path: real, name: path.basename(real), size: st.size, type: MIME[ext] ?? 'application/octet-stream' };
     });

@@ -783,7 +783,7 @@ export class ClaudeSettings implements AgentSettingsProvider {
   }
 
   private memoryPage(): SettingsPage {
-    const projectName = this.b.workspaceDir().replace(/\/+$/, '').split('/').pop() || 'Default workspace';
+    const projectName = this.b.workspaceDir().replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'Default workspace';
     const mem = (scope: 'user' | 'project', label: string): SettingItem => {
       const m = this.memory[scope] ?? {};
       return {

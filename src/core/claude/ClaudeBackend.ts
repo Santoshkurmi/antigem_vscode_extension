@@ -9,6 +9,7 @@ import type { AgentStatus, ControlChipView, ModelGroupView, ModelsState, SlashCo
 import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest } from '../types';
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { cleanTitle, collapseExpansions, displayUserText } from '../text';
+import { pathToUri } from '../paths';
 import { ClaudeSession, type NewChatControls } from './ClaudeSession';
 import { ClaudeSubagentView, parseSubagentId, subagentConversationId, toSubagentInfo, type SubagentWire } from './ClaudeSubagent';
 import { questionnaireFrom } from './ClaudeTranscript';
@@ -1020,7 +1021,7 @@ export class ClaudeBackend implements AgentBackend {
           hasActivity: false,
           runStatus: s.busy ? 'RUNNING' : s.live ? 'IDLE_LIVE' : 'IDLE',
           stepCount: 0,
-          workspaceUri: s.cwd ? `file://${s.cwd}` : '',
+          workspaceUri: s.cwd ? pathToUri(s.cwd) : '',
           nestingDepth: 0,
           agent: 'CLAUDE',
           archived: s.archived === true,
@@ -1156,7 +1157,7 @@ export class ClaudeBackend implements AgentBackend {
     if (!req.attachments.length && (await this.appCommand(s, typed))) return;
     if (!known) {
       const first = (typed || (req.attachments.length ? 'Attachment' : 'Chat')).split('\n').find((l) => l.trim()) ?? 'Chat';
-      const uri = req.workspaceUri ? (req.workspaceUri.startsWith('file://') ? req.workspaceUri : `file://${req.workspaceUri}`) : '';
+      const uri = req.workspaceUri ? pathToUri(req.workspaceUri) : '';
       const now = Date.now();
       this.localConvs.set(req.conversationId, {
         id: req.conversationId,

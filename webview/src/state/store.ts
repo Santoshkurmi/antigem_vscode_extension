@@ -31,6 +31,7 @@ import type {
 import { host } from '../host';
 import { patchUiPrefs, setThemeSurface, setUiPrefsSignal, uiPrefs } from '../theme';
 import { jarvisDraft, setJarvisDraft } from './jarvis';
+import { fileLinkToPath } from '../util/paths';
 
 export interface ChatState {
   conversationId: string | null;
@@ -584,7 +585,7 @@ export function mediaUrl(kind: 'html' | 'htmlFile' | 'file' | 'player' | 'youtub
 const imageCache = new Map<string, Promise<string | null>>();
 /** A local image (artifact, attachment, tool output) as a data: URL, read by the host; cached per path. */
 export function readImage(path: string): Promise<string | null> {
-  const key = path.replace(/^file:\/\//, '');
+  const key = fileLinkToPath(path);
   let p = imageCache.get(key);
   if (!p) {
     p = new Promise((resolve) => {
