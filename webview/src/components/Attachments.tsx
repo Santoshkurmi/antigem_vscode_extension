@@ -65,10 +65,8 @@ export function ComposerChip(props: { att: ChatAttachment; onRemove: () => void 
   const src = useImageSrc(() => props.att);
   const sub = () => {
     const a = props.att;
-    if (kind() === 'selection') {
-      const n = (a.lineEnd ?? a.lineStart ?? 0) - (a.lineStart ?? 0) + 1;
-      return n === 1 ? '1 line' : `${n} lines`;
-    }
+    // a range chip's name already says its lines (app.js:12-30)
+    if (kind() === 'selection') return null;
     if (kind() === 'folder') return 'Folder';
     return a.reference && a.size > 0 ? formatSize(a.size) : null;
   };

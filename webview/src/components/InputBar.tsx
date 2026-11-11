@@ -95,9 +95,14 @@ const offerKey = () => {
   return `${c.path}:${c.selection.startLine}-${c.selection.endLine}:${c.selection.text.length}`;
 };
 const selectionIncluded = () => !!offerKey() && excludedKey() !== offerKey();
+/** The editor's selection going with the next message (null when the user took it out). */
 function selectionAttachment(): ChatAttachment | null {
+  return selectionIncluded() ? liveSelectionChip() : null;
+}
+/** The editor's current selection as a chip, included or not. */
+function liveSelectionChip(): ChatAttachment | null {
   const c = editorContext();
-  if (!c?.selection || !selectionIncluded()) return null;
+  if (!c?.selection) return null;
   return {
     id: newId(),
     name: selectionLabel(c.name, c.selection.startLine, c.selection.endLine),
@@ -381,16 +386,17 @@ export function InputBar() {
             query,
             index: 0,
             pick: (f) => {
-              // the typed "@query" goes; the file becomes a chip
-              const head = text().substring(0, atIndex).replace(/ $/, (m) => (atIndex > 0 ? m : ''));
+              // the typed "@query" becomes "@path" in the text (no chip): the user can say what each file is for
+              // right where it is named ("@a.ts has the parser, @b.ts calls it")
+              const rel = (f.relativePath || f.path).replace(/\/+$/, '') + (f.kind === 'folder' ? '/' : '');
+              const token = `@${/\s/.test(rel) ? `"${rel}"` : rel} `;
+              const head = text().substring(0, atIndex);
               const tail = text().substring(ta.selectionStart ?? text().length).replace(/^ /, '');
-              const joined = head && tail && !/\s$/.test(head) ? `${head} ${tail}` : head + tail;
-              setText(joined);
-              addComposerAttachments([fileChip(f.path, f.kind ?? 'file')]);
+              setText(head + token + tail);
               setPopup(null);
               queueMicrotask(() => {
                 ta.focus();
-                const pos = head.length;
+                const pos = head.length + token.length;
                 ta.setSelectionRange(pos, pos);
                 autosize();
               });
@@ -617,19 +623,29 @@ function ReadOnlyBar() {
 
 /**
  * What is open / selected in the VS Code editor, offered with the next message (like Claude Code's VS Code
- * extension): a selection is included by default (✕ takes it out until the selection changes; a tap shows the
- * lines); the active file alone is offered dimmed, a tap attaches it as a file chip.
+ * extension): a selection is included by default (✕ takes it out until the selection changes); a tap locks it as a
+ * chip that stays when the editor moves on, so several ranges / files can be collected. The active file alone is
+ * offered dimmed, a tap locks it as a file chip.
  */
 function EditorOffer() {
   const ctx = () => editorContext();
   const fileAttached = () => !!ctx() && attachments().some((a) => a.path === ctx()!.path && (a.kind ?? 'file') !== 'selection');
+  // this exact range is already locked: the locked chip stands for it
+  const selectionLocked = () => {
+    const s = liveSelectionChip();
+    return !!s && attachments().some((a) => sameAtt(a, s));
+  };
+  const lockSelection = () => {
+    const s = liveSelectionChip();
+    if (s) addComposerAttachments([s]);
+    setExcludedKey(null);
+  };
   return (
-    <Show when={ctx() && (ctx()!.selection || !fileAttached())}>
+    <Show when={ctx() && (ctx()!.selection ? !selectionLocked() : !fileAttached())}>
       <Show
         when={ctx()!.selection}
         fallback={
-          <button class="offer-chip off" title={`${ctx()!.relativePath} · attach the current file`} onClick={() => addComposerAttachments([fileChip(ctx()!.path)])}>
-            <Icon name="visibility" size={15} />
+          <button class="offer-chip off" title={`${ctx()!.relativePath} · click to lock the current file into this message`} onClick={() => addComposerAttachments([fileChip(ctx()!.path)])}>
             <span class="offer-name">{ctx()!.name}</span>
             <Icon name="add" size={14} class="offer-add" />
           </button>
@@ -639,20 +655,20 @@ function EditorOffer() {
           <Show
             when={selectionIncluded()}
             fallback={
-              <button class="offer-chip off" title="Not included · click to include the selection" onClick={() => setExcludedKey(null)}>
-                <Icon name="visibility_off" size={15} />
+              <button class="offer-chip off" title="Not included · click to lock the selection into this message" onClick={lockSelection}>
                 <span class="offer-name">{selectionLabel(ctx()!.name, sel().startLine, sel().endLine)}</span>
+                <Icon name="lock" size={13} class="offer-add" />
               </button>
             }
           >
             <div class="offer-chip on">
               <button
                 class="offer-main"
-                title={`${ctx()!.relativePath} · included with your message · click to show the lines`}
-                onClick={() => send({ type: 'revealRange', path: ctx()!.path, startLine: sel().startLine, endLine: sel().endLine })}
+                title={`${ctx()!.relativePath} · included with your message while selected · click to lock it, then select more lines or files`}
+                onClick={lockSelection}
               >
-                <Icon name="visibility" size={15} />
                 <span class="offer-name">{selectionLabel(ctx()!.name, sel().startLine, sel().endLine)}</span>
+                <Icon name="lock" size={13} class="offer-add" />
               </button>
               <button class="att-remove" title="Don't include the selection" onClick={() => setExcludedKey(offerKey())}>
                 <Icon name="close_o" size={13} />

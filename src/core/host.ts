@@ -146,6 +146,7 @@ export class AppHost {
     if (this.platform.isOff()) {
       this.platform.powerOn();
       this.broadcast({ type: 'agents', agents: this.agentStatuses() });
+      this.broadcast({ type: 'toast', level: 'info', message: 'Starting AntiGem…' });
     }
     for (const b of this.active()) b.retry();
   }
@@ -1034,15 +1035,14 @@ export class AppHost {
       case 'powerOff': {
         if (
           !(await this.platform.confirm(
-            'Turn AntiGem off? The bridge and every agent stop (running chats are stopped) and AntiGem closes. Open AntiGem again to start it.',
-            'Turn off',
+            'Stop AntiGem? The bridge, every agent and the Antigravity hub stop (running chats stop) in every VS Code window. Press ▶ in the side bar to start them again.',
+            'Stop',
           ))
         )
           return;
-        // the toast first: the view may close with the power-off
-        this.broadcast({ type: 'toast', level: 'info', message: 'AntiGem is off — open it again (or press Reconnect) to start it' });
         await this.platform.powerOff();
         this.broadcast({ type: 'agents', agents: this.agentStatuses() });
+        this.broadcast({ type: 'toast', level: 'info', message: 'AntiGem stopped — press ▶ in the side bar to start it' });
         return;
       }
       case 'toolAction':

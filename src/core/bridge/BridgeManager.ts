@@ -40,6 +40,8 @@ export interface HubStatus {
 export type BridgeState = 'stopped' | 'starting' | 'running' | 'error';
 
 const TOKEN_FILE = path.join(os.homedir(), '.antigem_bridge', 'csrf_token.txt');
+/** Written by Stop (side bar): every VS Code window (and the dev server) leaves the bridge off until Start removes it. */
+const STOPPED_FILE = path.join(os.homedir(), '.antigem_bridge', 'stopped-by-user');
 const TOKEN_LEN = 12;
 
 export class BridgeManager {
@@ -126,16 +128,26 @@ export class BridgeManager {
     return (this.opts.launchedFlags?.get() ?? '') !== this.wantedFlags();
   }
 
-  /** Turned off by the user (drawer ⏻): nothing starts the bridge again until resume(). */
-  suspended = false;
+  /**
+   * Stopped by the user (side bar ■): nothing starts the bridge again until resume() (▶). Shared by every window
+   * through a marker file, so another window does not start it again a moment later.
+   */
+  get suspended(): boolean {
+    return fs.existsSync(STOPPED_FILE);
+  }
 
   async powerOff() {
-    this.suspended = true;
+    try {
+      fs.mkdirSync(path.dirname(STOPPED_FILE), { recursive: true });
+      fs.writeFileSync(STOPPED_FILE, `${new Date().toISOString()}\n`);
+    } catch (e) {
+      this.opts.log(`[bridge] could not mark the bridge stopped: ${e instanceof Error ? e.message : String(e)}`);
+    }
     await this.shutdown();
   }
 
   resume() {
-    this.suspended = false;
+    fs.rmSync(STOPPED_FILE, { force: true });
   }
 
   ensureRunning(): Promise<void> {
@@ -243,7 +255,8 @@ export class BridgeManager {
   /** Stops the bridge (it stops its hub) so the next ensureRunning starts a fresh one. */
   async shutdown() {
     try {
-      await this.fetch('/api/shutdown', { method: 'POST', signal: AbortSignal.timeout(5000) });
+      // not this.fetch(): it refuses while stopped, and Stop marks the bridge stopped before shutting it down
+      await fetch(this.baseUrl + '/api/shutdown', { method: 'POST', headers: this.authHeaders(), signal: AbortSignal.timeout(5000) });
     } catch {
       /* already gone */
     }

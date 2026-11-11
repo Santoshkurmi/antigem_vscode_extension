@@ -227,6 +227,13 @@ export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: ()
               active={state.ui.showArchived}
               onClick={() => setUi('showArchived', !state.ui.showArchived)}
             />
+            {/* ■ stops the bridge, its agents and the hub (the host asks first; they stay off in every window); ▶ starts them */}
+            <HeaderIcon
+              icon={stopped() ? 'play' : 'stop'}
+              title={stopped() ? 'Start AntiGem (bridge and agents)' : 'Stop AntiGem (bridge, agents and hub)'}
+              active={stopped()}
+              onClick={() => send(stopped() ? { type: 'retryConnections' } : { type: 'powerOff' })}
+            />
           </div>
 
           <Collapse when={searchOpen() || !!query()}>
@@ -511,7 +518,10 @@ export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: ()
   );
 }
 
-function HeaderIcon(props: { icon: 'search' | 'folder' | 'folder_open' | 'archive'; title: string; active: boolean; onClick: () => void }) {
+/** The user stopped AntiGem (the host marks every enabled agent "AntiGem is turned off"). */
+const stopped = () => state.agents.some((a) => a.detail === 'AntiGem is turned off');
+
+function HeaderIcon(props: { icon: 'search' | 'folder' | 'folder_open' | 'archive' | 'stop' | 'play'; title: string; active: boolean; onClick: () => void }) {
   return (
     <button class="header-round" classList={{ active: props.active }} title={props.title} onClick={props.onClick}>
       <Icon name={props.icon} size={19} />

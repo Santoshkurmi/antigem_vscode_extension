@@ -432,9 +432,17 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ---- editor → composer: the active file / selection, debounced
   let ctxTimer: NodeJS.Timeout | undefined;
+  // focusing a non-text editor (the AntiGem chat panel, a preview) leaves no active text editor: the last one is
+  // still offered while it is visible, so its selection is not lost on the way to the composer
+  let lastEditor: vscode.TextEditor | undefined;
   const pushContext = () => {
     if (ctxTimer) clearTimeout(ctxTimer);
-    ctxTimer = setTimeout(() => host?.setEditorContext(editorContext(vscode.window.activeTextEditor)), 150);
+    ctxTimer = setTimeout(() => {
+      const active = vscode.window.activeTextEditor;
+      if (active) lastEditor = active;
+      else if (lastEditor && !vscode.window.visibleTextEditors.includes(lastEditor)) lastEditor = undefined;
+      host?.setEditorContext(editorContext(active ?? lastEditor));
+    }, 150);
   };
   pushContext();
 
@@ -461,6 +469,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.onDidChangeTextEditorSelection((e) => {
       if (e.textEditor === vscode.window.activeTextEditor) pushContext();
     }),
+    vscode.window.onDidChangeVisibleTextEditors(pushContext),
     vscode.window.registerWebviewViewProvider(
       'antigem.chat',
       {
