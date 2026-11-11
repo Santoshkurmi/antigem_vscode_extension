@@ -15,8 +15,13 @@ import http from 'node:http';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
+import { playerPage } from './player';
 
-type Entry = { kind: 'html'; html: string; at: number } | { kind: 'dir'; dir: string; at: number } | { kind: 'file'; file: string; at: number };
+type Entry =
+  | { kind: 'html'; html: string; at: number }
+  | { kind: 'dir'; dir: string; at: number }
+  | { kind: 'file'; file: string; at: number }
+  | { kind: 'remote'; url: string; at: number };
 
 const MAX_ENTRIES = 300;
 const MAX_HTML = 4 * 1024 * 1024;
@@ -72,18 +77,6 @@ const ytPage = (id: string, start: number) => `<!doctype html><html><head><meta 
 <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{border:0;width:100%;height:100%}</style></head><body>
 <iframe src="https://www.youtube-nocookie.com/embed/${id}?autoplay=1&playsinline=1&rel=0${start > 0 ? `&start=${start}` : ''}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
 </body></html>`;
-
-/** A bare player for one file: fills the frame, native controls, says so when the file cannot play. */
-const playerPage = (src: string, audio: boolean) => `<!doctype html><html><head><meta charset="utf-8">
-<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,sans-serif}
-${audio ? 'body{display:flex;align-items:center;padding:0 12px}audio{width:100%}' : 'video{display:block;width:100%;height:100%;object-fit:contain;background:#000}'}
-#err{display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:#ddd;font-size:13px;text-align:center;padding:16px}</style></head>
-<body><${audio ? 'audio' : 'video'} id="m" src="${src}" controls autoplay playsinline preload="metadata"></${audio ? 'audio' : 'video'}>
-<div id="err"></div>
-<script>
-const m = document.getElementById('m');
-m.addEventListener('error', () => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = 'This file cannot play here' + (m.error && m.error.message ? ' (' + m.error.message + ')' : '') + '.'; m.style.display = 'none'; });
-</script></body></html>`;
 
 export class PreviewServer {
   private server: http.Server | null = null;
@@ -176,9 +169,16 @@ export class PreviewServer {
     return `${this.base}/f/${this.put({ kind: 'file', file: abs, at: Date.now() })}/${name}`;
   }
 
-  /** The player page of a local video / audio file (see /v/ above). */
-  player(file: string): string {
-    return this.file(file).replace(`${this.base}/f/`, `${this.base}/v/`);
+  /**
+   * The player page (see /v/ above) of a local video file, or of a video on the web: its page loads it (the webview
+   * itself may not, e.g. when the site sends no CORS headers).
+   */
+  player(source: string): string {
+    if (/^https?:\/\//i.test(source)) {
+      for (const [id, e] of this.entries) if (e.kind === 'remote' && e.url === source) return `${this.base}/v/${id}/`;
+      return `${this.base}/v/${this.put({ kind: 'remote', url: source, at: Date.now() })}/`;
+    }
+    return this.file(source).replace(`${this.base}/f/`, `${this.base}/v/`);
   }
 
   youtube(videoId: string, start = 0): string {
@@ -228,9 +228,9 @@ export class PreviewServer {
         return this.stream(req, res, file, /\.html?$/i.test(file) ? APP_CSP : null);
       }
       if (kind === 'f' && e.kind === 'file') return this.stream(req, res, e.file, null);
-      if (kind === 'v' && e.kind === 'file') {
-        const audio = /\.(mp3|wav|ogg|m4a|flac)$/i.test(e.file);
-        return this.send(res, 200, playerPage(`/f/${id}/${encodeURIComponent(path.basename(e.file))}`, audio), 'text/html; charset=utf-8', req.method === 'HEAD');
+      if (kind === 'v' && (e.kind === 'file' || e.kind === 'remote')) {
+        const src = e.kind === 'file' ? `/f/${id}/${encodeURIComponent(path.basename(e.file))}` : e.url;
+        return this.send(res, 200, playerPage(src), 'text/html; charset=utf-8', req.method === 'HEAD');
       }
       return this.fail(res, 404);
     } catch (err) {

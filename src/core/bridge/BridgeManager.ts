@@ -249,9 +249,20 @@ export class BridgeManager {
     }
     this.state = 'stopped';
   }
+
+  /**
+   * Stops the running bridge (its agents and hub) and starts a fresh one; waits until the old one is really gone, so
+   * the start does not just reuse it while it is still exiting.
+   */
+  async restart() {
+    this.resume();
+    await this.shutdown();
+    for (let i = 0; i < 40 && (await this.healthy()); i++) await new Promise((r) => setTimeout(r, 200));
+    if (await this.healthy()) throw new Error('The old bridge did not stop (another program on the port?)');
+    await this.ensureRunning();
+  }
 }
 
-/** Bridge flags for the CLI paths set in Settings → Agents → CLI locations. */
 /** Bridge flags that keep a disabled agent from running at all (AgentPreferences.bridgeFlags); none chosen yet = none runs. */
 export function agentFlags(enabled: string[] | undefined): string[] {
   const on = enabled ?? [];
@@ -263,6 +274,7 @@ export function agentFlags(enabled: string[] | undefined): string[] {
   return out;
 }
 
+/** Bridge flags for the CLI paths set in Settings → Agents → CLI locations. */
 export function cliPathArgs(paths: Partial<Record<'AGY' | 'CLAUDE' | 'CODEX' | 'OPENCODE', string>> | undefined): string[] {
   const p = paths ?? {};
   const out: string[] = [];

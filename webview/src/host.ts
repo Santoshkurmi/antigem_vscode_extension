@@ -25,7 +25,12 @@ if (isVsCode) {
   sendImpl = (m) => api.postMessage(m);
   getStateImpl = () => api.getState();
   setStateImpl = (s) => api.setState(s);
-  window.addEventListener('message', (e) => emit(e.data as HostToView));
+  // only the extension (VS Code's webview frame, same origin); never a frame inside the chat: an Interactive App or a
+  // video player (other origins) must not be able to fake chats, toasts or settings
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    emit(e.data as HostToView);
+  });
 } else {
   // Dev mode in a browser tab: talk to dev/server.ts.
   const url = (import.meta as any).env?.VITE_DEV_HOST ?? 'ws://127.0.0.1:5199';

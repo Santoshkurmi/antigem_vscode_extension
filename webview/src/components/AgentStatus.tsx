@@ -154,13 +154,14 @@ export function AgentStatusMenu(props: { anchor: () => HTMLElement | undefined; 
       <div class="menu-divider" style={{ 'margin-top': '12px' }} />
       <button
         class="agent-menu-link"
+        title="Stops the bridge with its agents and the Antigravity hub, then starts it again"
         onClick={() => {
           props.onClose();
-          send({ type: 'retryConnections' });
+          send({ type: 'restartBridge' });
         }}
       >
         <Icon name="restart" size={17} color={alpha('var(--on-surface)', 0.7)} />
-        <span>Reconnect agents</span>
+        <span>Restart bridge</span>
       </button>
     </DropdownMenu>
   );

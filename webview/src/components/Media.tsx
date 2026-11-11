@@ -566,9 +566,11 @@ const formatTime = (ms: number) => {
 };
 
 /**
- * ChatVideoPlayer before it plays: black 16:9 box (≤ 420dp tall, 12dp corners), the thumbnail cropped to it, the 52dp
- * play disc, the length (when known) and the caption. A click opens the video: a local file in VS Code (its media
- * preview plays it), anything else in the browser.
+ * ChatVideoPlayer: a local or web video plays in the app's player (the preview server's player page: first frame and
+ * length, then the round play / pause with ⟲10 / 10⟳, seek bar, speed, full view). Inside VS Code the webview cannot
+ * stream a local file itself (its service worker re-fetches every request to 127.0.0.1, which a <video> rejects), and a
+ * web video may refuse the webview (CORS), so both play in that page. The player loads once the card is on screen.
+ * data: / blob: videos play here directly.
  */
 export function VideoLinkCard(props: { url: string; title?: string | null; thumbnail?: string | null; durationMs?: number | null }) {
   const thumb = createImageUrl(() => props.thumbnail);
@@ -578,96 +580,133 @@ export function VideoLinkCard(props: { url: string; title?: string | null; thumb
   // the app's caption is the alt text only; with no title and no picture the card would say nothing, so it shows the
   // file name there instead
   const caption = () => props.title?.trim() || (props.thumbnail?.trim() ? '' : fileNameOf(props.url));
-  // the player, once started: a web video plays here as it is; a local file plays in a player page of the host's
-  // preview server (inside VS Code the webview cannot stream it itself: its service worker re-fetches every request
-  // to 127.0.0.1, and a <video> rejects those re-fetched byte ranges)
-  const [src, setSrc] = createSignal<string | null>(null);
+  const name = () => props.title?.trim() || fileNameOf(props.url) || 'Video';
+  const source = createMemo(() => classify(props.url));
+  const inline = () => {
+    const m = source();
+    return m?.kind === 'web' && /^(data|blob):/i.test(m.ref);
+  };
   const [frame, setFrame] = createSignal<string | null>(null);
+  const [direct, setDirect] = createSignal(false);
   const [failed, setFailed] = createSignal(false);
-  createComputed(
-    on(
-      () => props.url,
-      () => {
-        setSrc(null);
-        setFrame(null);
-        setFailed(false);
-      },
-    ),
-  );
-  const playing = () => src() ?? frame();
+  const [full, setFull] = createSignal(false);
+  let box: HTMLDivElement | undefined;
+  let iframe: HTMLIFrameElement | undefined;
+
   const openOutside = () => {
-    const m = classify(props.url);
+    const m = source();
     if (!m) return;
     if (m.kind === 'local') send({ type: 'openFile', path: m.ref });
     else send({ type: 'openUrl', url: m.ref });
   };
-  const open = (e: Event) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const m = classify(props.url);
-    if (!m) return;
-    if (m.kind === 'web') {
-      if (/^https:/i.test(m.ref) || /^(data|blob):/i.test(m.ref)) setSrc(m.ref);
-      else openOutside();
+  /** The player page for this video ([autoplay]: the user already pressed play). */
+  const load = (autoplay: boolean) => {
+    const m = source();
+    if (!m || frame() || direct()) return;
+    if (inline()) {
+      setDirect(true);
       return;
     }
-    mediaUrl('player', m.ref).then(setFrame, openOutside);
+    const accent = getComputedStyle(document.body).getPropertyValue('--primary').trim();
+    const q = new URLSearchParams({ title: name(), ...(m.kind === 'local' ? { local: '1' } : {}), ...(autoplay ? { autoplay: '1' } : {}) });
+    if (/^#[0-9a-f]{3,8}$/i.test(accent)) q.set('accent', accent);
+    mediaUrl('player', m.ref).then(
+      (u) => setFrame(`${u}?${q}`),
+      () => setFailed(true),
+    );
   };
+  createComputed(
+    on(
+      () => props.url,
+      () => {
+        setFrame(null);
+        setDirect(false);
+        setFailed(false);
+        setFull(false);
+      },
+    ),
+  );
+  // load the player once the card is (nearly) on screen: it shows the first frame and the length, like the app
+  onMount(() => {
+    if (!box) return;
+    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && (io.disconnect(), load(false)), { rootMargin: '200px' });
+    io.observe(box);
+    onCleanup(() => io.disconnect());
+  });
+  // the player's requests: full view, open elsewhere, save a copy (only from this card's own frame)
+  const onMessage = (e: MessageEvent) => {
+    if (!iframe || e.source !== iframe.contentWindow) return;
+    const what = (e.data as { antigemPlayer?: string } | null)?.antigemPlayer;
+    if (what === 'full') setFull(true);
+    else if (what === 'unfull') setFull(false);
+    else if (what === 'open') openOutside();
+    else if (what === 'save') {
+      const m = source();
+      if (m?.kind === 'local') send({ type: 'saveArtifact', path: m.ref });
+      // a web video: the extension downloads it (save dialog first)
+      else if (m && /^https?:/i.test(m.ref)) send({ type: 'downloadUrl', url: m.ref, name: fileNameOf(m.ref) || `${name()}.mp4` });
+    }
+  };
+  // Esc in the chat leaves the full view too (the player is told, so its button turns back)
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !full()) return;
+    e.stopPropagation();
+    setFull(false);
+    iframe?.contentWindow?.postMessage({ antigemPlayerFull: false }, '*');
+  };
+  onMount(() => {
+    window.addEventListener('message', onMessage);
+    document.addEventListener('keydown', onKey, true);
+    onCleanup(() => {
+      window.removeEventListener('message', onMessage);
+      document.removeEventListener('keydown', onKey, true);
+    });
+  });
+
   return (
     <div class="vl">
-      <Show when={frame()} keyed>
-        {(u) => (
-          <div class="vl-box playing">
-            <iframe class="vl-frame" src={u} title={props.title?.trim() || fileNameOf(props.url)} allow="autoplay; fullscreen; picture-in-picture" allowfullscreen />
-            <button class="vl-out" title="Open in VS Code" onClick={openOutside}>
-              <Icon name="open_in_new" size={15} color="#fff" />
-            </button>
-          </div>
-        )}
-      </Show>
-      <Show when={src()} keyed>
-        {(u) => (
-          <div class="vl-box playing">
+      <div ref={box} class="vl-box" classList={{ playing: !!frame() || direct(), full: full() }}>
+        <Show
+          when={frame()}
+          keyed
+          fallback={
             <Show
-              when={!failed()}
+              when={direct()}
               fallback={
-                <div class="vl-failed">
-                  <span>This video cannot play here.</span>
-                  <button class="vl-open" onClick={openOutside}>
-                    Open it
-                  </button>
+                <div
+                  class="vl-idle"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Play ${name()}`}
+                  title={props.url}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (failed()) openOutside();
+                    else load(true);
+                  }}
+                  onKeyDown={keyActivate(() => load(true))}
+                >
+                  <Show when={hasThumb()}>
+                    <img class="vl-thumb" src={thumb.url()!} alt="" draggable={false} onError={() => setThumbFailed(true)} />
+                  </Show>
+                  <div class="vl-disc" aria-hidden="true">
+                    <Icon name="play" size={31.2} color="#fff" />
+                  </div>
+                  <Show when={(props.durationMs ?? 0) > 0}>
+                    <div class="vl-length">{formatTime(props.durationMs!)}</div>
+                  </Show>
                 </div>
               }
             >
-              <video class="vl-video" src={u} controls autoplay playsinline preload="metadata" onError={() => setFailed(true)} />
+              <video class="vl-video" src={source()?.ref} controls autoplay playsinline preload="metadata" onError={() => setDirect(false)} />
             </Show>
-            <button class="vl-out" title={classify(props.url)?.kind === 'local' ? 'Open in VS Code' : 'Open in browser'} onClick={openOutside}>
-              <Icon name="open_in_new" size={15} color="#fff" />
-            </button>
-          </div>
-        )}
-      </Show>
-      <div
-        classList={{ hidden: !!playing() }}
-        class="vl-box"
-        role="button"
-        tabIndex={0}
-        aria-label={`Play ${props.title?.trim() || fileNameOf(props.url) || 'video'}`}
-        title={props.url}
-        onClick={open}
-        onKeyDown={keyActivate(open)}
-      >
-        <Show when={hasThumb()}>
-          <img class="vl-thumb" src={thumb.url()!} alt="" draggable={false} onError={() => setThumbFailed(true)} />
-        </Show>
-        <div class="vl-disc" aria-hidden="true">
-          <Icon name="play" size={31.2} color="#fff" />
-        </div>
-        <Show when={(props.durationMs ?? 0) > 0}>
-          <div class="vl-length">{formatTime(props.durationMs!)}</div>
+          }
+        >
+          {(u) => <iframe ref={iframe} class="vl-frame" src={u} title={name()} allow="autoplay; fullscreen; picture-in-picture" allowfullscreen />}
         </Show>
       </div>
-      <Show when={caption()}>
+      <Show when={caption() && !full()}>
         <div class="media-caption">{caption()}</div>
       </Show>
     </div>

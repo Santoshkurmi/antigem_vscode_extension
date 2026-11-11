@@ -545,8 +545,24 @@ function AnswerSummary(props: { call: ToolCall; questionnaire: ChoiceQuestionnai
   );
 }
 
+/** Claude Code / OpenCode's answer: `User has answered your questions: "Q1"="A1", "Q2"="A2". You can now…` */
+const QA_PAIR = /"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"/g;
+
 function parseAnswerSummary(output: string, q: ChoiceQuestionnaire): { q: string; a: string }[] {
   const res: { q: string; a: string }[] = [];
+  // the one-line "Q"="A" form: each question gets its own answer (not the whole line)
+  const unq = (x: string) => x.replace(/\\(.)/g, '$1').trim();
+  const pairs = [...(output || '').matchAll(QA_PAIR)].map((m) => ({ q: unq(m[1]), a: unq(m[2]) }));
+  if (pairs.length) {
+    const norm = (x: string) => x.toLowerCase().replace(/\s+/g, ' ').trim();
+    for (const qq of q.questions) {
+      const hit = pairs.find((p) => norm(p.q) === norm(qq.prompt));
+      res.push({ q: qq.prompt.trim(), a: hit ? hit.a || 'Selected' : 'Skipped' });
+    }
+    // answers to questions the card does not know (an edited question) are still shown
+    for (const p of pairs) if (!q.questions.some((qq) => norm(qq.prompt) === norm(p.q))) res.push(p);
+    return res;
+  }
   const clean = (output || '').replace('[User Clarification & Preferences]:', '').trim();
   const lines = clean
     .split('\n')

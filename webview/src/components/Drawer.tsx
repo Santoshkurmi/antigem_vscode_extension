@@ -227,10 +227,6 @@ export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: ()
               active={state.ui.showArchived}
               onClick={() => setUi('showArchived', !state.ui.showArchived)}
             />
-            {/* turn AntiGem off (the host asks first): its servers and agents stop; Reconnect starts them again */}
-            <button class="header-round power" title="Turn off AntiGem" onClick={() => send({ type: 'powerOff' })}>
-              <Icon name="power" size={19} />
-            </button>
           </div>
 
           <Collapse when={searchOpen() || !!query()}>

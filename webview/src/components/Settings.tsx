@@ -1486,6 +1486,28 @@ function FormDialog(props: {
                     <For each={f.options ?? []}>{(o) => <Chip label={o.label} on={values[f.id] === o.value} onClick={() => setValues(f.id, o.value)} />}</For>
                   </div>
                 </Match>
+                <Match when={f.kind === 'checklist'}>
+                  <div class="form-label">{f.label}</div>
+                  <div class="chip-flow">
+                    <For each={f.options ?? []}>
+                      {(o) => {
+                        const ticked = () => (values[f.id] ?? '').split(',').filter(Boolean);
+                        const on = () => ticked().includes(o.value);
+                        return (
+                          <Chip
+                            label={(on() ? '✓ ' : '') + o.label}
+                            on={on()}
+                            onClick={() => {
+                              const next = on() ? ticked().filter((v) => v !== o.value) : [...ticked(), o.value];
+                              // at least one stays ticked
+                              if (next.length) setValues(f.id, (f.options ?? []).map((x) => x.value).filter((v) => next.includes(v)).join(','));
+                            }}
+                          />
+                        );
+                      }}
+                    </For>
+                  </div>
+                </Match>
                 <Match when={f.kind === 'multiline'}>
                   <div class="form-label">
                     {f.label}

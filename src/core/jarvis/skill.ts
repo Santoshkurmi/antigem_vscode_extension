@@ -4,6 +4,7 @@
 // look for a skill, list MCP servers or read config files: it calls the tools straight away. Every later message
 // carries a short note with fresh context, the rules it forgets most and its mission brief (managerPreamble).
 import { createHash } from 'node:crypto';
+import type { AgentKind } from '../../../shared/model';
 import { hiddenBlock } from '../text';
 import type { JarvisEngine } from './engine';
 import { TASK_LABEL } from './types';
@@ -221,10 +222,14 @@ You direct only your own tasks: other Jarvis chats' tasks (and those chats thems
 
   // ------------------------------------------------------------------ the user's global context entries for Jarvis
 
-  private jarvisEntries(every: boolean | null) {
+  /** [agent]: only the entries for that agent (a task chat); none: every entry (Jarvis' own guide). */
+  private jarvisEntries(every: boolean | null, agent?: AgentKind) {
     return this.j.host
       .contextEntries()
-      .filter((e) => e.enabled && e.text.trim() && e.forJarvis === true && (every == null || e.everyMessage === every));
+      .filter(
+        (e) =>
+          e.enabled && e.text.trim() && e.forJarvis === true && (every == null || e.everyMessage === every) && (!agent || !e.agents || e.agents.includes(agent)),
+      );
   }
 
   private static entriesBlock(list: { title: string; text: string }[]) {
@@ -249,18 +254,18 @@ You direct only your own tasks: other Jarvis chats' tasks (and those chats thems
   }
 
   /** The context for a chat Jarvis starts for a task: the built-in context and the user's Jarvis-enabled entries. */
-  taskBody(): string | null {
+  taskBody(agent?: AgentKind): string | null {
     const parts: string[] = [];
-    const builtIn = this.j.host.builtInContext();
+    const builtIn = this.j.host.builtInContext(undefined, agent);
     if (builtIn) parts.push(`[AntiGem app context: from the app, not the user. Follow it for this whole chat.]\n\n${builtIn}`);
-    const own = this.jarvisEntries(null);
+    const own = this.jarvisEntries(null, agent);
     if (own.length) parts.push(`## The user's own instructions\n${Skill.entriesBlock(own)}`);
     return parts.length ? parts.join('\n\n') : null;
   }
 
   /** A follow-up Jarvis sends to a task chat: the user's Jarvis-enabled every-message entries in front. */
-  taskFollowUp(text: string): string {
-    const own = this.jarvisEntries(true);
+  taskFollowUp(text: string, agent?: AgentKind): string {
+    const own = this.jarvisEntries(true, agent);
     if (!own.length) return text;
     return hiddenBlock(`[The user's standing instructions, sent with every message]\n${Skill.entriesBlock(own)}`) + text;
   }

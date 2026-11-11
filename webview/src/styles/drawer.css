@@ -721,12 +721,6 @@
   line-height: calc(16 * var(--sp));
   color: color-mix(in srgb, var(--on-surface) 60%, transparent);
 }
-.header-round.power {
-  color: color-mix(in srgb, var(--error) 75%, transparent);
-}
-.header-round.power:hover {
-  background: color-mix(in srgb, var(--error) 10%, transparent);
-}
 .drawer-hit-snippet mark:empty,
 .search-row mark:empty,
 .mention-name mark:empty {

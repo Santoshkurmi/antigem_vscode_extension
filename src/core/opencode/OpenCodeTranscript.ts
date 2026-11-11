@@ -23,6 +23,8 @@ class Part {
   startedAt: number | null = null;
   endedAt: number | null = null;
   exitCode: number | null = null;
+  /** The `question` tool's answers, one list per question (its metadata.answers). */
+  toolAnswers: string[][] | null = null;
   /** Waiting for a permission reply (status shown as such; the request itself is in pendingPermissions). */
   awaitingPermission = false;
   constructor(
@@ -229,6 +231,7 @@ export class OpenCodeTranscript {
                 p.toolError = str(e, 'message') ?? null;
                 if (p.toolStatus === 'RUNNING') p.toolStatus = 'FAILED';
               }
+              p.toolAnswers = answersOf(obj(state, 'metadata'));
               const exit = num(obj(state, 'metadata'), 'exit');
               if (exit != null) p.exitCode = Math.trunc(exit);
               p.startedAt = num(obj(co, 'time'), 'ran') ?? num(obj(co, 'time'), 'created') ?? null;
@@ -470,6 +473,7 @@ export class OpenCodeTranscript {
             part.toolStatus = 'SUCCESS';
             part.awaitingPermission = false;
             part.toolOutput = contentText(arr(d, 'content')) || part.toolOutput;
+            part.toolAnswers = answersOf(obj(d, 'metadata')) ?? part.toolAnswers;
             const exit = num(obj(d, 'metadata'), 'exit');
             if (exit != null) part.exitCode = Math.trunc(exit);
             part.endedAt = Date.now();
@@ -971,12 +975,45 @@ export function todoChecklist(input: Json): string {
     .join('\n');
 }
 
+/** metadata.answers of the `question` tool: one list of picked / typed answers per question. */
+function answersOf(md: Json | null): string[][] | null {
+  const a = arr(md, 'answers');
+  return a.length && a.every(Array.isArray) ? (a as unknown[][]).map((l) => l.map(String)) : null;
+}
+
+/**
+ * A finished `question` tool as the answered questionnaire (its questions are in the input): the card shows each
+ * question with its own answer, from metadata.answers when there, else from the "User has answered…" text.
+ */
+function answeredQuestion(p: Part): { questionnaire: ChoiceQuestionnaire; output: string } | null {
+  const qs = arr(p.toolInput, 'questions').filter((q) => q && typeof q === 'object');
+  if (!qs.length) return null;
+  const questions: ChoiceQuestion[] = qs.map((q, i) => ({
+    id: String(i + 1),
+    prompt: str(q, 'question') ?? `Question ${i + 1}`,
+    description: str(q, 'header') ?? null,
+    isMultiSelect: q.multiple === true,
+    options: arr(q, 'options')
+      .filter((o) => o && typeof o === 'object')
+      .map((o, j) => ({ id: String(j + 1), label: str(o, 'label') ?? '', description: str(o, 'description') ?? null })),
+    allowCustomAnswer: true,
+  }));
+  const output = p.toolAnswers
+    ? questions.map((q, i) => `• ${q.prompt}: ${(p.toolAnswers![i] ?? []).join(', ') || 'Skipped'}`).join('\n\n')
+    : p.toolOutput;
+  return { questionnaire: { title: questions[0].description || 'OpenCode asked', questions, allowCustomNote: false }, output };
+}
+
 function toolCall(p: Part): ToolCall {
   const status = p.awaitingPermission && p.toolStatus === 'RUNNING' ? 'PENDING_APPROVAL' : p.toolStatus;
   let output = p.toolOutput;
   if (p.toolError && !p.toolOutput.includes(p.toolError)) output += (output ? '\n' : '') + p.toolError;
   if (!output && p.toolName.toLowerCase() === 'todowrite') output = todoChecklist(p.toolInput);
+  // an answered (or dismissed) question: the questions with their answers; a pending one is the form's card
+  const asked = p.toolName.toLowerCase() === 'question' && p.toolStatus !== 'RUNNING' ? answeredQuestion(p) : null;
+  if (asked) output = asked.output;
   return {
+    ...(asked ? { questionnaire: asked.questionnaire } : {}),
     id: safeId(p.key.replace(/^tool:/, '')),
     name: p.toolName || 'tool',
     toolType: toolTypeFor(p.toolName),

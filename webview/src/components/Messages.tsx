@@ -395,13 +395,14 @@ export function SummaryCard(props: { msg: ChatMessage }) {
 /** WaveDivider: a label between two muted wavy lines (a new day, a model switch). */
 let waveIds = 0;
 export function WaveDivider(props: { label: string }) {
-  // one smooth curve repeated across the width: 14 × 7 per wave, 1px line (inline SVG: no data: URL for the CSP)
+  // one smooth wave repeated across the width: 16px per wave, 7px tall (the app's 14px, a little wider), 1px line
+  // (inline SVG: no data: URL for the CSP)
   const id = `wave-${++waveIds}`;
   const wave = () => (
     <svg class="wave" height="7" aria-hidden="true">
       <defs>
-        <pattern id={id} width="14" height="7" patternUnits="userSpaceOnUse">
-          <path d="M0 3.5 Q1.75 0 3.5 3.5 T7 3.5 T10.5 3.5 T14 3.5" fill="none" stroke="currentColor" stroke-width="1" />
+        <pattern id={id} width="16" height="7" patternUnits="userSpaceOnUse">
+          <path d="M0 3.5 Q4 0 8 3.5 T16 3.5" fill="none" stroke="currentColor" stroke-width="1" />
         </pattern>
       </defs>
       <rect width="100%" height="7" fill={`url(#${id})`} />

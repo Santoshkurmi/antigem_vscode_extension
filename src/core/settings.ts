@@ -20,7 +20,20 @@ export interface ContextEntry {
   everyMessage: boolean;
   /** Also told to Jarvis (its chats and the chats it starts for tasks). */
   forJarvis?: boolean;
+  /** The agents it is sent to (unset = every agent, also ones added later). */
+  agents?: AgentKind[];
 }
+
+/** Every agent, in the order the pickers show them. */
+export const CONTEXT_AGENTS: AgentKind[] = ['AGY', 'CLAUDE', 'CODEX', 'OPENCODE'];
+const AGENT_NAMES: Record<AgentKind, string> = { AGY: 'Antigravity', CLAUDE: 'Claude Code', CODEX: 'Codex', OPENCODE: 'OpenCode' };
+const agentOptions = () => CONTEXT_AGENTS.map((a) => ({ value: a, label: AGENT_NAMES[a] }));
+/** For one agent? (no agent: any; no list: every agent). */
+const appliesTo = (agents: AgentKind[] | undefined, agent: AgentKind | null | undefined) => !agent || !agents || agents.includes(agent);
+/** Ticked agents → what is stored: every agent = unset (new agents get it too). */
+const agentsValue = (list: AgentKind[]) => (CONTEXT_AGENTS.every((a) => list.includes(a)) ? undefined : list);
+/** "Claude Code, Codex" for a list that leaves some out. */
+const agentsLabel = (agents: AgentKind[] | undefined) => (agents ? agents.map((a) => AGENT_NAMES[a] ?? a).join(', ') : null);
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 const TOKEN_RE = /(?<=^|\s)\/([A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
@@ -109,6 +122,16 @@ export class HostSettings {
     return this.store.get<boolean>('global.context.builtin') !== false;
   }
 
+  /** The agents the built-in context goes to (unset = every agent). */
+  builtInAgents(): AgentKind[] | undefined {
+    return this.store.get<AgentKind[]>('global.context.builtinAgents');
+  }
+
+  /** The built-in context for [agent] (null when off, or not for that agent). */
+  builtInFor(agent: AgentKind | null | undefined, h = '##'): string | null {
+    return this.builtInEnabled() && appliesTo(this.builtInAgents(), agent) ? this.builtInText(h) : null;
+  }
+
   /** What the extension tells every chat about itself; [h] = the heading level of its section. */
   builtInText(h = '##'): string {
     return [
@@ -126,25 +149,32 @@ export class HostSettings {
         'prompt() and window.open() / new tabs do NOT (show messages and dialogs inside the page instead); it cannot reach local files, ' +
         'the chat or the editor.',
       'Show the images, videos, diagrams and pages you make this way instead of only naming the path.',
+      '',
+      `${h} Asking the user`,
+      'If you have a tool for asking the user questions with options (e.g. AskUserQuestion, question, ask_question), use it ' +
+        'when a request is vague or you are unsure what the user wants and the answer fits a few choices: the chat shows it as a ' +
+        'card the user clicks, which is faster than typing. Ask everything you need in one go and still allow a typed answer.',
     ].join('\n');
   }
 
-  /** The first-message context of a normal chat, or null when there is nothing to send. */
-  private firstMessageBody(): string | null {
+  /** The first-message context of a normal chat of [agent], or null when there is nothing to send. */
+  private firstMessageBody(agent?: AgentKind | null): string | null {
     const parts: string[] = [];
-    if (this.builtInEnabled()) parts.push(this.builtInText());
-    const own = this.activeEntries().filter((e) => !e.everyMessage);
+    const builtIn = this.builtInFor(agent);
+    if (builtIn) parts.push(builtIn);
+    const own = this.activeEntries(agent).filter((e) => !e.everyMessage);
     if (own.length) parts.push("## The user's own instructions\n" + entriesBlock(own));
     return parts.length ? parts.join('\n\n') : null;
   }
 
-  private activeEntries(): ContextEntry[] {
-    return this.contextEntries().filter((e) => e.enabled && e.text.trim());
+  /** The entries switched on, for [agent] (none given: all of them). */
+  private activeEntries(agent?: AgentKind | null): ContextEntry[] {
+    return this.contextEntries().filter((e) => e.enabled && e.text.trim() && appliesTo(e.agents, agent));
   }
 
-  /** Changes whenever the first-message context changes (an extension update, an edited entry). */
-  private fingerprint(): string {
-    const body = this.firstMessageBody() ?? '';
+  /** Changes whenever the first-message context of [agent] changes (an extension update, an edited entry). */
+  private fingerprint(agent?: AgentKind | null): string {
+    const body = this.firstMessageBody(agent) ?? '';
     let h = 0;
     for (let i = 0; i < body.length; i++) h = (Math.imul(31, h) + body.charCodeAt(i)) | 0;
     return (h >>> 0).toString(16);
@@ -168,12 +198,12 @@ export class HostSettings {
    * A normal chat message with the hidden context in front (GlobalContext.wrap): the first-message part on a new chat,
    * and again when it changed since this chat got it; every-message entries always.
    */
-  wrap(text: string, isNew: boolean, chatId?: string | null): string {
-    const first = this.firstMessageBody();
-    const fp = this.fingerprint();
+  wrap(text: string, isNew: boolean, chatId?: string | null, agent?: AgentKind | null): string {
+    const first = this.firstMessageBody(agent);
+    const fp = this.fingerprint(agent);
     const known = chatId ? this.sentMap()[chatId] : undefined;
     const sendFirst = first != null && (isNew || known !== fp);
-    const everyOwn = this.activeEntries().filter((e) => e.everyMessage);
+    const everyOwn = this.activeEntries(agent).filter((e) => e.everyMessage);
     const every = everyOwn.length ? "[The user's standing instructions, sent with every message]\n" + entriesBlock(everyOwn) : null;
     if (!sendFirst && !every) return text;
     let note = '';
@@ -270,6 +300,13 @@ export class HostSettings {
         ],
       },
       {
+        id: 'agents',
+        label: 'Use for',
+        kind: 'checklist',
+        value: (e?.agents ?? CONTEXT_AGENTS).join(','),
+        options: agentOptions(),
+      },
+      {
         id: 'jarvis',
         label: 'Also tell Jarvis',
         kind: 'select',
@@ -332,6 +369,15 @@ export class HostSettings {
                 description: 'Once at the start of each chat (again when it changes). Turn it off if your agents should not get it.',
                 value: this.builtInEnabled(),
               },
+              {
+                kind: 'checklist',
+                id: 'builtin.agents',
+                label: 'Use for',
+                description: 'The agents that get it.',
+                values: this.builtInAgents() ?? CONTEXT_AGENTS,
+                options: agentOptions(),
+                disabled: !this.builtInEnabled(),
+              },
               { kind: 'text', id: 'builtin.text', label: 'What it says', value: this.builtInText(), multiline: true, rows: 12, disabled: true },
             ],
           },
@@ -349,7 +395,7 @@ export class HostSettings {
                   id: e.id,
                   title: e.title || e.text.split('\n')[0].slice(0, 60),
                   subtitle: e.title ? e.text.split('\n')[0].slice(0, 80) : null,
-                  status: e.everyMessage ? 'Every message' : 'Chat start',
+                  status: [e.everyMessage ? 'Every message' : 'Chat start', agentsLabel(e.agents)].filter(Boolean).join(' · '),
                   statusTone: 'muted' as const,
                   toggle: e.enabled,
                   actions: [
@@ -372,6 +418,11 @@ export class HostSettings {
   change(page: string, id: string, value: unknown, rowId?: string): boolean {
     if (page === 'context' && id === 'builtin') {
       this.store.set('global.context.builtin', value === true);
+      return true;
+    }
+    if (page === 'context' && id === 'builtin.agents' && Array.isArray(value)) {
+      const list = CONTEXT_AGENTS.filter((a) => (value as string[]).includes(a));
+      if (list.length) this.store.set('global.context.builtinAgents', agentsValue(list));
       return true;
     }
     if (page === 'context' && id === 'entries' && rowId) {
@@ -409,7 +460,16 @@ export class HostSettings {
       }
       if ((actionId === 'add' || actionId === 'edit') && values) {
         if (!values.text?.trim()) throw new Error('Enter the text');
-        const entry = { title: (values.title ?? '').trim(), text: values.text, everyMessage: values.when === 'every', forJarvis: values.jarvis === 'yes' };
+        // an older form has no agents field: every agent
+        const picked = values.agents == null ? CONTEXT_AGENTS : CONTEXT_AGENTS.filter((a) => values.agents.split(',').includes(a));
+        if (!picked.length) throw new Error('Pick at least one agent');
+        const entry = {
+          title: (values.title ?? '').trim(),
+          text: values.text,
+          everyMessage: values.when === 'every',
+          forJarvis: values.jarvis === 'yes',
+          agents: agentsValue(picked),
+        };
         if (actionId === 'edit' && rowId) this.saveContext(list.map((e) => (e.id === rowId ? { ...e, ...entry } : e)));
         else this.saveContext([...list, { id: randomUUID(), enabled: true, ...entry }]);
         return '';

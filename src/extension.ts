@@ -31,25 +31,7 @@ let sidebarViewId: string | undefined;
 /** Interactive Apps, local videos and YouTube embeds play from this local server (webview CSP: frame-src, media-src). */
 const preview = new PreviewServer();
 let previewReady: Promise<void> | null = null;
-/** Chats open in editor tabs (the drawer's ⏻ closes them). */
-const chatPanels = new Set<vscode.WebviewPanel>();
-/** The drawer's ⏻ closed AntiGem: opening its view again starts it (like opening the app again). */
-let closedByPower = false;
 
-/** Hides the AntiGem view: closes the side bar it is shown in. */
-async function hideAntiGemView() {
-  const wait = () => new Promise((r) => setTimeout(r, 250));
-  if (!sidebarView?.visible) return;
-  // the view lives in the primary side bar unless the user moved it
-  await vscode.commands.executeCommand('workbench.action.closeSidebar');
-  await wait();
-  if (!sidebarView?.visible) return;
-  // it is in the secondary side bar (or the panel): give the primary side bar back and close that one instead
-  await vscode.commands.executeCommand('workbench.action.toggleSidebarVisibility');
-  await vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
-  await wait();
-  if (sidebarView?.visible) await vscode.commands.executeCommand('workbench.action.closePanel');
-}
 let sidebarView: vscode.WebviewView | undefined;
 
 const MAX_SELECTION = 40_000;
@@ -100,7 +82,6 @@ function openChatPanel(context: vscode.ExtensionContext, conversationId: string 
     localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist'), vscode.Uri.joinPath(context.extensionUri, 'media')],
   });
   panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
-  chatPanels.add(panel);
   const disposables: vscode.Disposable[] = [];
   void (previewReady ?? Promise.resolve()).then(() => {
     panel.webview.html = webviewHtml(panel.webview, context.extensionUri);
@@ -109,7 +90,6 @@ function openChatPanel(context: vscode.ExtensionContext, conversationId: string 
     panel.title = t.length > 40 ? `${t.slice(0, 40)}…` : t;
   });
   panel.onDidDispose(() => {
-    chatPanels.delete(panel);
     host?.detachView(id);
     disposables.forEach((d) => d.dispose());
   });
@@ -251,19 +231,10 @@ export function activate(context: vscode.ExtensionContext) {
     prompt: (m, v) => Promise.resolve(vscode.window.showInputBox({ prompt: m, value: v })),
     powerOff: async () => {
       await bridge.powerOff();
-      // like closing the app: its chats in editor tabs and its view close too; opening AntiGem again starts it
-      closedByPower = true;
-      for (const p of [...chatPanels]) p.dispose();
-      await hideAntiGemView();
     },
     powerOn: () => bridge.resume(),
     isOff: () => bridge.suspended,
-    restartBridge: async () => {
-      bridge.resume();
-      await bridge.shutdown();
-      await new Promise((r) => setTimeout(r, 800));
-      await bridge.ensureRunning();
-    },
+    restartBridge: () => bridge.restart(),
     applyAgents: async (firstChoice) => {
       if (bridge.state !== 'running' || !bridge.agentFlagsChanged()) return true;
       if (
@@ -276,10 +247,7 @@ export function activate(context: vscode.ExtensionContext) {
       )
         return false;
       log('[bridge] restarting for the enabled agents');
-      bridge.resume();
-      await bridge.shutdown();
-      await new Promise((r) => setTimeout(r, 800));
-      await bridge.ensureRunning();
+      await bridge.restart();
       return true;
     },
     showLogs: () => output.show(),
@@ -290,6 +258,46 @@ export function activate(context: vscode.ExtensionContext) {
         await vscode.workspace.fs.copy(vscode.Uri.file(p), target, { overwrite: true });
         void vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
       }
+    },
+    downloadUrl: async (url, name) => {
+      const safe = (name || 'download').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120);
+      const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(homeDir(), 'Downloads', safe)) });
+      if (!target) return;
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Downloading ${path.basename(target.fsPath)}`, cancellable: true },
+        async (progress, token) => {
+          const ac = new AbortController();
+          token.onCancellationRequested(() => ac.abort());
+          const res = await fetch(url, { signal: ac.signal, redirect: 'follow' });
+          if (!res.ok || !res.body) throw new Error(`The server answered ${res.status}`);
+          const total = Number(res.headers.get('content-length')) || 0;
+          const tmp = `${target.fsPath}.part`;
+          const out = fs.createWriteStream(tmp);
+          let got = 0;
+          let shown = 0;
+          try {
+            const reader = res.body.getReader();
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              got += value.length;
+              if (!out.write(value)) await new Promise((r) => out.once('drain', r));
+              const pct = total ? Math.floor((got / total) * 100) : 0;
+              if (total && pct > shown) {
+                progress.report({ increment: pct - shown, message: `${pct}%` });
+                shown = pct;
+              }
+            }
+            await new Promise<void>((ok, bad) => out.end((e?: Error | null) => (e ? bad(e) : ok())));
+            fs.renameSync(tmp, target.fsPath);
+          } catch (e) {
+            out.destroy();
+            fs.rmSync(tmp, { force: true });
+            throw e;
+          }
+        },
+      );
+      void vscode.window.showInformationMessage(`Saved ${path.basename(target.fsPath)}`);
     },
     cliStatus: async () => {
       const get = (p: string) => bridge.json<any>(p).catch(() => null);
@@ -467,15 +475,6 @@ export function activate(context: vscode.ExtensionContext) {
           const disposables: vscode.Disposable[] = [];
           const id = connectWebview(view.webview, 'sidebar', null, disposables);
           sidebarViewId = id;
-          disposables.push(
-            view.onDidChangeVisibility(() => {
-              // opened again after the drawer's ⏻: start the bridge and the agents again
-              if (view.visible && closedByPower) {
-                closedByPower = false;
-                host?.reconnect();
-              }
-            }),
-          );
           view.onDidDispose(() => {
             host?.detachView(id);
             disposables.forEach((d) => d.dispose());
@@ -500,9 +499,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('antigem.sendSelection', addSelection),
     vscode.commands.registerCommand('antigem.addFile', (uri?: vscode.Uri, uris?: vscode.Uri[]) => addPaths(uri, uris)),
     vscode.commands.registerCommand('antigem.restartBridge', async () => {
-      await bridge.shutdown();
       log('[bridge] restarting');
-      await bridge.ensureRunning().catch((e) => log(`[bridge] ${e instanceof Error ? e.message : String(e)}`));
+      await bridge.restart().catch((e) => log(`[bridge] ${e instanceof Error ? e.message : String(e)}`));
+      host?.reconnect();
     }),
     vscode.commands.registerCommand('antigem.showLogs', () => output.show()),
     { dispose: () => mcp.stop() },

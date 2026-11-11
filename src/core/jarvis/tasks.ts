@@ -91,7 +91,7 @@ export class Tasks {
     const st = b.status();
     if (st.state === 'not_installed' || st.state === 'disabled') throw new Error(`${st.label} is not available: ${st.detail ?? st.state}.`);
     // the task chat gets Jarvis' brief and the user's global context entries allowed for Jarvis
-    const hidden = [brief?.trim() ? brief : null, this.j.skill.taskBody()].filter(Boolean).join('\n\n');
+    const hidden = [brief?.trim() ? brief : null, this.j.skill.taskBody(agent)].filter(Boolean).join('\n\n');
     const prompt = (hidden ? hiddenBlock(hidden) : '') + this.j.host.expand(text);
     const id = randomUUID();
     const ws = projectPath ?? this.j.activeProjectPath();
@@ -188,7 +188,7 @@ export class Tasks {
       for (let w = 0; w < 24 && this.j.driver.isBusy(t.id); w++) await new Promise((r) => setTimeout(r, 500));
     }
     // the user's every-message entries allowed for Jarvis go along with each follow-up
-    const outgoing = this.j.skill.taskFollowUp(this.j.host.expand(text));
+    const outgoing = this.j.skill.taskFollowUp(this.j.host.expand(text), t.agent);
     this.j.driver.watch(t.id, HOLD, t.agent);
     this.cancelRelease(t.id);
     try {

@@ -480,12 +480,19 @@
 }
 
 /* ------------------------------------------------------------------ inline players (ChatVideoPlayer / YouTube) */
-.vl-box.hidden,
 .yt-media.hidden {
   display: none;
 }
 .vl-box.playing {
   cursor: default;
+}
+.vl-idle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 .vl-video {
   width: 100%;
@@ -493,40 +500,15 @@
   object-fit: contain;
   background: #000;
 }
-.vl-out {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.5);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.vl-box.playing:hover .vl-out {
-  opacity: 1;
-}
-.vl-failed {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  color: #fff;
-  font-size: 12px;
-}
-.vl-open {
-  padding: 4px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 14px;
-  background: transparent;
-  color: #fff;
-  cursor: pointer;
+/* the player's full view: the whole chat view (VS Code allows no real full screen in a webview) */
+.vl-box.full {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  width: auto;
+  max-width: none;
+  aspect-ratio: auto;
+  border-radius: 0;
 }
 .yt-media.playing {
   cursor: default;

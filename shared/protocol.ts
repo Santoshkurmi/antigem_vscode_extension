@@ -219,7 +219,8 @@ export interface SettingListRow {
 export interface SettingFormField {
   id: string;
   label: string;
-  kind: 'text' | 'multiline' | 'select' | 'toggle' | 'password';
+  /** checklist: several of `options` ticked; value = the ticked values joined with ",". */
+  kind: 'text' | 'multiline' | 'select' | 'toggle' | 'password' | 'checklist';
   placeholder?: string | null;
   value?: string | null;
   options?: SettingOption[];
@@ -635,6 +636,8 @@ export type ViewToHost =
   | { type: 'searchFiles'; reqId: string; query: string }
   | { type: 'copy'; text: string }
   | { type: 'retryConnections' }
+  /** Kill the bridge (its agents and the agy hub) and start it again; the host asks first. */
+  | { type: 'restartBridge' }
   /** Optional: ask for the agent's `/` commands (answered with `commands`). */
   | { type: 'requestCommands'; agent: AgentKind }
   /** Optional: regenerate this assistant reply (footer ↻). */
@@ -657,6 +660,8 @@ export type ViewToHost =
   | { type: 'forgetProject'; path: string }
   /** Optional: an artifact card's download button: save a copy of the file (e.g. a "Save As" dialog). */
   | { type: 'saveArtifact'; path: string }
+  /** Save a file from the web (a video in the chat) with a save dialog; the host downloads it. */
+  | { type: 'downloadUrl'; url: string; name: string }
   /** Open the Notes screen: the host answers with `notes` and keeps sending them while it is open. */
   | { type: 'requestNotes' }
   /** Notes screen edits: create (note fields), update (whole note), delete (id), restore (undo a delete). */

@@ -96,10 +96,11 @@ function apply() {
   const root = document.documentElement;
   const side = state.side();
   if (root.dataset.theme !== side) root.dataset.theme = side;
-  // until the host sends prefs the stylesheet's defaults (Midnight Aurora / Porcelain) are what shows
+  // until the host sends prefs: VS Code's own colors (the default mode) when the webview has them, so the first paint
+  // already matches the editor; elsewhere (dev browser page) the stylesheet's defaults (Midnight Aurora / Porcelain)
   for (const k of applied) root.style.removeProperty(k);
   applied = [];
-  if (!uiPrefs()) return;
+  if (!uiPrefs() && !state.fromVscode()) return;
   const vars = cssVars(state.current(), state.allThemes());
   for (const [k, v] of Object.entries(vars)) {
     root.style.setProperty(k, v);

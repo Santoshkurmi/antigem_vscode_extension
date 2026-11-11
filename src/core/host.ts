@@ -61,6 +61,8 @@ export interface Platform {
   cliStatus(): Promise<Partial<Record<AgentKind, { installed: boolean; path: string; version: string }>>>;
   /** "Save a copy" of a file the agent produced (artifact download). */
   saveCopy(path: string): Promise<void>;
+  /** "Save a copy" of a file on the web: a save dialog, then the download (absent in dev). */
+  downloadUrl?(url: string, name: string): Promise<void>;
   /** File chooser (absolute path, or null when cancelled); `filters` = label → extensions. */
   pickFile?(opts: { title?: string; filters?: Record<string, string[]> }): Promise<string | null>;
   /** A modal choice between buttons: the picked label, undefined when cancelled. */
@@ -252,7 +254,7 @@ export class AppHost {
       refreshSettings: () => this.refreshSettings(),
       expand: (t) => this.settings.expand(t),
       contextEntries: () => this.settings.contextEntries(),
-      builtInContext: (h) => (this.settings.builtInEnabled() ? this.settings.builtInText(h) : null),
+      builtInContext: (h, agent) => this.settings.builtInFor(agent, h),
       uiPrefs: () => this.getUiPrefs(),
       patchUiPrefs: (p) => this.patchUiPrefs(p),
       editorContext: () => this.editorCtx,
@@ -849,7 +851,7 @@ export class AppHost {
         await backend.send({
           conversationId: msg.conversationId,
           isNew: msg.isNew,
-          text: jarvisText ?? this.settings.wrap(expanded, msg.isNew, msg.conversationId),
+          text: jarvisText ?? this.settings.wrap(expanded, msg.isNew, msg.conversationId, msg.agent),
           attachments: others,
           modelId: msg.modelId,
           workspaceUri: msg.workspaceUri ?? this.platform.workspaceFolders()[0]?.uri ?? null,
@@ -1015,6 +1017,20 @@ export class AppHost {
       case 'retryConnections':
         this.reconnect();
         return;
+      case 'restartBridge': {
+        if (!(await this.platform.confirm('Restart the AntiGem bridge? Its agents and the Antigravity hub stop and start again; running chats stop in every VS Code window.', 'Restart')))
+          return;
+        this.toast(v, 'info', 'Restarting the bridge…');
+        try {
+          await this.platform.restartBridge();
+          for (const b of this.active()) b.retry();
+          this.broadcast({ type: 'agents', agents: this.agentStatuses() });
+          this.toast(v, 'info', 'Bridge restarted');
+        } catch (e) {
+          this.toast(v, 'error', `The bridge did not start: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return;
+      }
       case 'powerOff': {
         if (
           !(await this.platform.confirm(
@@ -1111,6 +1127,11 @@ export class AppHost {
         return;
       case 'saveArtifact':
         await this.platform.saveCopy(msg.path.replace(/^file:\/\//, ''));
+        return;
+      case 'downloadUrl':
+        if (!/^https?:\/\//i.test(msg.url)) throw new Error('Only web addresses can be downloaded');
+        if (!this.platform.downloadUrl) throw new Error('Downloads are not available here');
+        await this.platform.downloadUrl(msg.url, msg.name);
         return;
       case 'setControl':
         await this.backendFor(msg.agent)?.setControl?.(msg.conversationId, msg.id, msg.value);

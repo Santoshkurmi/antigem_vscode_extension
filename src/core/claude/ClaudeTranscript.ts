@@ -922,6 +922,8 @@ export class ClaudeTranscript {
   private addLocalCommandOutput(raw: string) {
     const out = raw.replace(/<\/?local-command-(stdout|stderr)>/g, '').trim();
     if (!out) return;
+    // a model switch ("Set model to opus (…)", "Kept model as …"): the chat's "Switched to …" divider shows it already
+    if (/^(set model to|kept model as)\b/i.test(out.replace(/\x1b\[[0-9;]*m/g, ''))) return;
     // output outside a turn (e.g. a live model switch) is complete on arrival
     let turn = this.activeTurn;
     if (!turn) {

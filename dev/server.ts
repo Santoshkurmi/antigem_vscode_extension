@@ -97,12 +97,7 @@ const platform: Platform = {
   },
   powerOn: () => bridge.resume(),
   isOff: () => bridge.suspended,
-  restartBridge: async () => {
-    bridge.resume();
-    await bridge.shutdown();
-    await new Promise((r) => setTimeout(r, 800));
-    await bridge.ensureRunning();
-  },
+  restartBridge: () => bridge.restart(),
   bridgeInfo: () => ({ port: bridge.opts.port, hubPort: bridge.opts.hubPort, logFile: bridge.opts.logFile }),
   pickFolder: async () => null,
   // dev: the file a test wants picked (ANTIGEM_DEV_PICK_FILE: the path, or a .txt holding it), the first button of a
