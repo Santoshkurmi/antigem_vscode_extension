@@ -21,6 +21,8 @@ export const INSTRUCTIONS =
   'end your turn, the extension reports back with a <jarvis_events> message. Keep multi-step work in jarvis_mission_set / jarvis_mission_update. ' +
   'Help: jarvis_app_guide, jarvis_get_config, jarvis_open_settings. Ask before deleting anything.';
 
+/** Claude Code's reasoning efforts (its --effort / the composer's chip). */
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const POLL_STOP =
   'Stop polling. The task is still working, and checking again will not make it faster. END YOUR TURN now ' +
   '(start any other independent task first): the extension sends you a <jarvis_events> message the moment it finishes, fails or needs you.';
@@ -97,6 +99,11 @@ export function jarvisTools(): McpTool[] {
           AGENTS,
         ),
         model: P('string', "Model id or part of its name (default: the team's, else the agent's default)"),
+        effort: P(
+          'string',
+          "Reasoning effort when the user asks for one (\"sonnet high\" = model sonnet, effort high). Claude: low, medium, high, xhigh, max; Codex: the model's levels (minimal, low, medium, high, xhigh). Default: the agent's default",
+        ),
+        thinking: P('boolean', 'Claude only: extended thinking on (true) or off (false). Default: the agent\'s default'),
         project: P('string', "Project name or path to work in (default: the team's, else the active project)"),
         open: P('boolean', "Also show the chat in the user's view (default false)"),
         ...managerId,
@@ -261,6 +268,8 @@ export function jarvisTools(): McpTool[] {
         agent: P('string', 'claude, agy, opencode or codex (default: the agent new chats use)', AGENTS),
         message: P('string', 'The first message / task'),
         model: P('string', "Model id or name (default: the agent's default)"),
+        effort: P('string', 'Reasoning effort (Claude: low, medium, high, xhigh, max; Codex: the model\'s levels). Only with a message'),
+        thinking: P('boolean', 'Claude only: extended thinking on or off. Only with a message'),
         project: P('string', 'Project name or path to work in (default: the active project)'),
         open: P('boolean', "Also show the chat in the user's view (default false)"),
         ...managerId,
@@ -726,7 +735,18 @@ class JarvisMcp {
       if (!m) return errorResult(`No ${agent.toLowerCase()} model matches "${modelArg}".`);
       model = m.id;
     }
-    const t = await j.tasks.start(agent, goal, str(args.title) || null, model, project?.path ?? null, caller, team?.name ?? '', this.subAgentBrief(team));
+    // effort / thinking the user asked for ("sonnet high"): set before the first message, so its first turn uses them
+    const effortArg = str(args.effort).trim().toLowerCase();
+    let effort: string | null = null;
+    if (effortArg && effortArg !== 'default') {
+      if (agent === 'CLAUDE') {
+        if (!CLAUDE_EFFORTS.includes(effortArg)) return errorResult(`Claude effort is one of ${CLAUDE_EFFORTS.join(', ')}.`);
+      } else if (agent !== 'CODEX') return errorResult(`${agentName(agent)} has no effort setting: leave effort out (pick a model instead).`);
+      effort = effortArg;
+    }
+    if (args.thinking != null && agent !== 'CLAUDE') return errorResult('thinking is a Claude Code setting: leave it out for this agent.');
+    const thinking = args.thinking != null ? bool(args.thinking) : null;
+    const t = await j.tasks.start(agent, goal, str(args.title) || null, model, project?.path ?? null, caller, team?.name ?? '', this.subAgentBrief(team), { effort, thinking });
     // work started: the autopilot's patience starts over
     j.managers.resetNudges(caller);
     if (bool(args.open)) setTimeout(() => j.host.showChat(t.id, t.agent), 2500);
@@ -960,7 +980,7 @@ class JarvisMcp {
         break;
       case 'appearance': {
         const p = j.host.uiPrefs();
-        out.appearance = { theme_mode: p.theme ?? 'auto', light_theme: p.lightTheme ?? null, dark_theme: p.darkTheme ?? null, chat_font_scale: p.chatFontScale ?? 1 };
+        out.appearance = { theme_mode: p.theme ?? 'vscode', light_theme: p.lightTheme ?? null, dark_theme: p.darkTheme ?? null, chat_font_scale: p.chatFontScale ?? 1 };
         break;
       }
       case 'projects': {
@@ -971,7 +991,7 @@ class JarvisMcp {
       default:
         out.agents = agents();
         out.jarvis = jarvis();
-        out.theme_mode = j.host.uiPrefs().theme ?? 'auto';
+        out.theme_mode = j.host.uiPrefs().theme ?? 'vscode';
     }
     return json(out);
   }
@@ -1250,7 +1270,14 @@ class JarvisMcp {
     const ro = (key: string, about: string, get: () => unknown): Setting => ({ key, about, values: 'read-only', own: true, readOnly: true, get });
     return [
       // ---- app (only when the user allowed it)
-      choice('theme_mode', 'Light, dark or follow VS Code (auto)', false, ['auto', 'light', 'dark'], () => String(j.host.uiPrefs().theme ?? 'auto'), (v) => j.host.patchUiPrefs({ theme: v })),
+      choice(
+        'theme_mode',
+        "vscode (VS Code's own theme colors, the default), auto (VS Code's light / dark side with AntiGem themes), light or dark",
+        false,
+        ['vscode', 'auto', 'light', 'dark'],
+        () => String(j.host.uiPrefs().theme ?? 'vscode'),
+        (v) => j.host.patchUiPrefs({ theme: v }),
+      ),
       {
         key: 'chat_font_scale',
         about: 'Chat text size',

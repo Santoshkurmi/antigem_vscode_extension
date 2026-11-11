@@ -566,19 +566,19 @@
   color: color-mix(in srgb, var(--primary) 85%, transparent);
 }
 .thinking-title {
-  font-size: calc(12.5 * var(--sp));
+  font-size: calc(13.5 * var(--sp));
   font-weight: 500;
   color: color-mix(in srgb, var(--on-surface) 65%, transparent);
   white-space: nowrap;
 }
 .thinking-sep {
   margin: 0 6px;
-  font-size: calc(12 * var(--sp));
+  font-size: calc(13 * var(--sp));
   color: color-mix(in srgb, var(--on-surface) 35%, transparent);
 }
 .thinking-preview {
   min-width: 0;
-  font-size: calc(12 * var(--sp));
+  font-size: calc(13 * var(--sp));
   color: color-mix(in srgb, var(--on-surface) 45%, transparent);
   white-space: nowrap;
   overflow: hidden;
@@ -593,7 +593,7 @@
   flex-shrink: 0;
 }
 .thinking-live {
-  font-size: calc(12.5 * var(--sp));
+  font-size: calc(13.5 * var(--sp));
   font-weight: 500;
   color: var(--primary);
 }
@@ -613,8 +613,8 @@
   min-width: 0;
 }
 .thinking-text {
-  font-size: calc(12 * var(--sp));
-  line-height: calc(17.5 * var(--sp));
+  font-size: calc(13.5 * var(--sp));
+  line-height: calc(20 * var(--sp));
   color: color-mix(in srgb, var(--on-surface) 72%, transparent);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -622,7 +622,7 @@
 .thinking-duration {
   margin-top: 8px;
   font-family: var(--mono);
-  font-size: calc(11.5 * var(--sp));
+  font-size: calc(12.5 * var(--sp));
   font-weight: 500;
   color: color-mix(in srgb, var(--primary) 90%, transparent);
 }

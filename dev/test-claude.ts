@@ -83,6 +83,8 @@ function describeItem(it: SettingItem): string {
       return `checklist ${it.id}: ${it.values.join(',')}`;
     case 'presets':
       return `presets ${it.id}: ${it.tiles.map((t) => `${t.name}${t.added ? ' (added)' : ''}`).join(', ')}`;
+    case 'modelGroups':
+      return `modelGroups ${it.id}: ${it.groups.map((g) => `${g.name}${g.on ? '' : ' (off)'} ${g.models.filter((m) => m.on).length}/${g.models.length}`).join(', ')}`;
   }
 }
 

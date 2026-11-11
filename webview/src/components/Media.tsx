@@ -4,7 +4,8 @@
 // YouTube card and the video card open their link instead.
 import { createComputed, createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
 import { Portal } from 'solid-js/web';
-import { readImage, send } from '../state/store';
+import { mediaUrl, readImage, send } from '../state/store';
+import { isVsCode } from '../host';
 import { Icon, IconButton, nextFrame } from '../ui/primitives';
 
 // Material icons the app uses that ui/iconData.ts does not have (filled set, @material-design-icons/svg).
@@ -466,11 +467,36 @@ export function YouTubeCard(props: { url: string; videoId: string; title?: strin
     props.url && /youtube\.com|youtu\.be/i.test(props.url) ? props.url : `https://www.youtube.com/watch?v=${props.videoId}`;
   const title = () => props.title?.trim() || 'YouTube Video';
   const [thumbFailed, setThumbFailed] = createSignal(false);
-  createComputed(on(() => props.videoId, () => setThumbFailed(false)));
+  // the inline player (an embed page from the host's preview server: YouTube refuses to play without a referrer)
+  const [player, setPlayer] = createSignal<string | null>(null);
+  createComputed(
+    on(
+      () => props.videoId,
+      () => {
+        setThumbFailed(false);
+        setPlayer(null);
+      },
+    ),
+  );
   const open = (e: Event) => {
     e.preventDefault();
     e.stopPropagation();
     send({ type: 'openUrl', url: videoUrl() });
+  };
+  const start = () => {
+    const t = /[?&#](?:t|start)=(\d+)/.exec(props.url ?? '')?.[1];
+    return t ? Number(t) : 0;
+  };
+  const play = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // YouTube's player loads inside VS Code but never starts (it aborts every video request in VS Code's Electron):
+    // there the video opens in the browser. Elsewhere (the dev page) it plays in the chat.
+    if (isVsCode) {
+      send({ type: 'openUrl', url: videoUrl() });
+      return;
+    }
+    mediaUrl('youtube', props.videoId, start()).then(setPlayer, () => send({ type: 'openUrl', url: videoUrl() }));
   };
   return (
     <div class="yt-card">
@@ -492,7 +518,23 @@ export function YouTubeCard(props: { url: string; videoId: string; title?: strin
           onClick={open}
         />
       </div>
-      <div class="yt-media" role="button" tabIndex={0} aria-label={`Play ${title()}`} title={videoUrl()} onClick={open} onKeyDown={keyActivate(open)}>
+      <Show when={player()} keyed>
+        {(u) => (
+          <div class="yt-media playing">
+            <iframe class="yt-frame" src={u} title={title()} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen />
+          </div>
+        )}
+      </Show>
+      <div
+        class="yt-media"
+        classList={{ hidden: !!player() }}
+        role="button"
+        tabIndex={0}
+        aria-label={`Play ${title()}`}
+        title={isVsCode ? `Opens in your browser: ${videoUrl()}` : videoUrl()}
+        onClick={play}
+        onKeyDown={keyActivate(play)}
+      >
         <Show when={!thumbFailed()}>
           <img
             class="yt-thumb"
@@ -536,17 +578,62 @@ export function VideoLinkCard(props: { url: string; title?: string | null; thumb
   // the app's caption is the alt text only; with no title and no picture the card would say nothing, so it shows the
   // file name there instead
   const caption = () => props.title?.trim() || (props.thumbnail?.trim() ? '' : fileNameOf(props.url));
-  const open = (e: Event) => {
-    e.preventDefault();
-    e.stopPropagation();
+  // the player, once started: a local file streams from the host's preview server, a web video plays as it is
+  const [src, setSrc] = createSignal<string | null>(null);
+  const [failed, setFailed] = createSignal(false);
+  createComputed(
+    on(
+      () => props.url,
+      () => {
+        setSrc(null);
+        setFailed(false);
+      },
+    ),
+  );
+  const openOutside = () => {
     const m = classify(props.url);
     if (!m) return;
     if (m.kind === 'local') send({ type: 'openFile', path: m.ref });
     else send({ type: 'openUrl', url: m.ref });
   };
+  const open = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const m = classify(props.url);
+    if (!m) return;
+    if (m.kind === 'web') {
+      if (/^https:/i.test(m.ref) || /^(data|blob):/i.test(m.ref)) setSrc(m.ref);
+      else openOutside();
+      return;
+    }
+    mediaUrl('file', m.ref).then(setSrc, openOutside);
+  };
   return (
     <div class="vl">
+      <Show when={src()} keyed>
+        {(u) => (
+          <div class="vl-box playing">
+            <Show
+              when={!failed()}
+              fallback={
+                <div class="vl-failed">
+                  <span>This video cannot play here.</span>
+                  <button class="vl-open" onClick={openOutside}>
+                    Open it
+                  </button>
+                </div>
+              }
+            >
+              <video class="vl-video" src={u} controls autoplay playsinline preload="metadata" onError={() => setFailed(true)} />
+            </Show>
+            <button class="vl-out" title={classify(props.url)?.kind === 'local' ? 'Open in VS Code' : 'Open in browser'} onClick={openOutside}>
+              <Icon name="open_in_new" size={15} color="#fff" />
+            </button>
+          </div>
+        )}
+      </Show>
       <div
+        classList={{ hidden: !!src() }}
         class="vl-box"
         role="button"
         tabIndex={0}

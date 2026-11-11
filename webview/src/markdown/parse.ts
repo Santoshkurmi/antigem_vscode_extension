@@ -74,7 +74,7 @@ const ALERT_LINE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION|INFO)\](\s+.*)?$/i;
 const NUMBERED = /^(\d+\.)\s+(.*)/;
 const YT = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/|img\.youtube\.com\/vi\/)([a-zA-Z0-9_-]{11})/i;
 
-const UI_LANGS = new Set(['interactive_ui', 'interactive_app', 'html_app', 'canvas_app', 'widget', 'ui', 'mini_app']);
+const UI_LANGS = new Set(['interactive_ui', 'interactive_app', 'html_app', 'canvas_app', 'widget', 'ui', 'mini_app', 'html_preview', 'html-preview', 'html-app']);
 const UI_TOOL_NAMES = new Set(['interactive_ui', 'render_ui', 'create_interactive_app', 'interactive_app']);
 
 export function splitLines(text: string): string[] {

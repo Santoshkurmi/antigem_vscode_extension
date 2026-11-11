@@ -268,11 +268,39 @@ export type SettingItem =
       /** "Add" button with a form (settingAction {id, actionId: 'add', values}). */
       addLabel?: string | null;
       addForm?: SettingFormField[] | null;
+      /**
+       * How the rows show: 'rows' (default); 'tiles', a grid of cards; 'search', one button (labelled `label`) that opens
+       * a searchable sheet of the rows. With tiles and search a tap on a row runs its action, or asks which one first
+       * when it has several (status 'Connected' marks a tile as added).
+       */
+      display?: 'rows' | 'tiles' | 'search' | null;
+      /** display 'search': the sheet's title ("Connect a provider"). */
+      searchTitle?: string | null;
+      /** Tiles / the search button: accent token or hex ('opencode', '#D97757'…). */
+      accent?: string | null;
+      /** Tiles: Material icon name. */
+      icon?: string | null;
     }
   /** Opens a sub-page (the view sends requestSettings {page: id}). */
   | { kind: 'page'; id: string; label: string; description?: string | null; icon?: string | null; badge?: string | null }
   /** Usage meters (account quota). */
   | { kind: 'quota'; id: string; label: string; groups: ModelGroupView[] }
+  /**
+   * The app's ModelsCard: providers with their models, each provider a collapsible row (switch + "3 of 12 models on");
+   * opened: All on / All off, a search when it has many, a switch per model. Changes: settingChange {id, rowId:
+   * 'provider:<group id>' | 'model:<model id>', value: boolean}; All on / off: settingAction {id, rowId: group id,
+   * actionId: 'allOn' | 'allOff'}.
+   */
+  | {
+      kind: 'modelGroups';
+      id: string;
+      label: string;
+      description?: string | null;
+      emptyText?: string | null;
+      /** Accent token or hex for the switches ('opencode'). */
+      accent?: string | null;
+      groups: { id: string; name: string; on: boolean; models: { id: string; name: string; detail?: string | null; on: boolean }[] }[];
+    }
   /**
    * The app's MCP preset tiles (Custom Plugin MCP, Plugin Developer, Browser, Notes & To-dos, Jarvis, Theme, Stitch,
    * Google Flow, Custom server…): a grid of cards; a tap sends settingAction {id: item.id, actionId: tile.id, values?}
@@ -544,6 +572,8 @@ export type HostToView =
   | { type: 'addAttachments'; attachments: ChatAttachment[] }
   /** Answer to readImage (a data: URL, or null when unreadable / too big). */
   | { type: 'imageData'; reqId: string; dataUrl: string | null }
+  /** Answer to mediaUrl (null with an error when it cannot be served). */
+  | { type: 'mediaUrl'; reqId: string; url: string | null; error?: string | null }
   /** Answer to searchChats. */
   | { type: 'chatSearchResult'; reqId: string; results: ChatSearchHit[] }
   /** Put the cursor in the composer (keyboard shortcut). */
@@ -637,6 +667,12 @@ export type ViewToHost =
   | { type: 'setControl'; agent: AgentKind; conversationId: string | null; id: string; value: string }
   /** Show a local image (artifact / attachment thumbnail): answered with imageData. */
   | { type: 'readImage'; reqId: string; path: string }
+  /**
+   * An address the chat can frame or play (the local preview server): an Interactive App's HTML (`html`), an app's
+   * .html file on disk (`htmlFile`), a local video / audio file (`file`) or a YouTube video id (`youtube`). Answered
+   * with mediaUrl.
+   */
+  | { type: 'mediaUrl'; reqId: string; kind: 'html' | 'htmlFile' | 'file' | 'youtube'; value: string; start?: number }
   /** Files / folders dropped on the view (VS Code explorer or OS): answered with `attachments {reqId}`. */
   | { type: 'resolveDrop'; reqId: string; uris: string[] }
   /** Search the content of chats (drawer deep search): answered with chatSearchResult. */

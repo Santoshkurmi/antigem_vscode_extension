@@ -37,6 +37,7 @@ check what comes back and keep going until the job is really done, for hours if 
 
 ## The event loop (the most important rule)
 1. Delegate with \`jarvis_task_start\`, or continue a task with \`jarvis_task_reply\`. Start ALL independent tasks in the same turn.
+   A model with a level ("claude sonnet high") is model + \`effort\` (and \`thinking\` for Claude) on the same call, so the first turn uses them.
 2. Then END YOUR TURN with a short note to the user. Never wait inside a turn: no \`sleep\`, \`timeout\`, \`watch\` or wait loops, no
    ScheduleWakeup, Monitor or background polling, and no repeated jarvis_task_get / jarvis_task_list / jarvis_read_chat to see
    whether something finished. The extension stops a turn that waits.
@@ -230,10 +231,14 @@ You direct only your own tasks: other Jarvis chats' tasks (and those chats thems
     return list.map((e) => (e.title.trim() ? `### ${e.title.trim()}\n` : '') + e.text.trim()).join('\n\n');
   }
 
-  /** A section of the Jarvis guide: the user's Jarvis-enabled first-message entries. */
+  /** A section of the Jarvis guide: the built-in context and the user's Jarvis-enabled first-message entries. */
   jarvisGuideSection(): string | null {
+    const parts: string[] = [];
+    const builtIn = this.j.host.builtInContext('###');
+    if (builtIn) parts.push(`## AntiGem app context (for you and every chat you start)\n${builtIn}`);
     const own = this.jarvisEntries(false);
-    return own.length ? `## The user's own instructions\n${JARVIS_PRIORITY}\n\n${Skill.entriesBlock(own)}` : null;
+    if (own.length) parts.push(`## The user's own instructions\n${JARVIS_PRIORITY}\n\n${Skill.entriesBlock(own)}`);
+    return parts.length ? parts.join('\n\n') : null;
   }
 
   /** The user's Jarvis-enabled every-message entries, for the note in front of every Jarvis message. */
@@ -243,10 +248,14 @@ You direct only your own tasks: other Jarvis chats' tasks (and those chats thems
     return `user's standing instructions (the Jarvis rules win on conflict): ${own.map((e) => (e.title.trim() ? `${e.title.trim()}: ` : '') + e.text.trim().replace(/\n/g, ' ')).join(' | ')}`;
   }
 
-  /** The context for a chat Jarvis starts for a task: the user's Jarvis-enabled entries. */
+  /** The context for a chat Jarvis starts for a task: the built-in context and the user's Jarvis-enabled entries. */
   taskBody(): string | null {
+    const parts: string[] = [];
+    const builtIn = this.j.host.builtInContext();
+    if (builtIn) parts.push(`[AntiGem app context: from the app, not the user. Follow it for this whole chat.]\n\n${builtIn}`);
     const own = this.jarvisEntries(null);
-    return own.length ? `## The user's own instructions\n${Skill.entriesBlock(own)}` : null;
+    if (own.length) parts.push(`## The user's own instructions\n${Skill.entriesBlock(own)}`);
+    return parts.length ? parts.join('\n\n') : null;
   }
 
   /** A follow-up Jarvis sends to a task chat: the user's Jarvis-enabled every-message entries in front. */

@@ -384,6 +384,8 @@ export class OpenCodeSettings implements AgentSettingsProvider {
           actions: [
             ...(isCred && !active ? [{ id: 'use', label: 'Use this account' }] : []),
             ...(isCred ? [{ id: 'disconnect', label: 'Disconnect', danger: true, confirm: `Disconnect ${conn.label} from ${i.name}?` }] : []),
+            // the app's "Add account": another account of the same provider
+            ...(this.providerRow(i).actions ?? []),
           ],
         });
       }
@@ -398,7 +400,6 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       rows: accounts,
       emptyText: "Nothing connected yet: OpenCode's free models work without an account.",
     });
-    accountItems.push({ kind: 'page', id: 'opencode.models', label: 'Models in the picker', icon: 'view_list', description: 'Turn providers or single models off' });
 
     // ---- a running sign-in
     const sections: SettingsSection[] = [{ id: 'accounts', title: '', agent: 'OPENCODE', items: accountItems }];
@@ -431,6 +432,9 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       sections.push({ id: 'signIn', title: '', agent: 'OPENCODE', items });
     }
 
+    // ---- the models of every connected provider, to turn on / off (the app's ModelsCard, under Your providers)
+    sections.push({ id: 'models', title: '', agent: 'OPENCODE', items: [this.modelsItem()] });
+
     // ---- connect: the quick providers, then every provider (each row's menu: its sign-in methods)
     const quick = QUICK.filter(([id]) => byId.has(id) && signInMethods(byId.get(id)!).length).map(([id, title, hint]) => this.providerRow(byId.get(id)!, title, hint));
     const all = integ.filter((i) => signInMethods(i).length);
@@ -439,8 +443,18 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       title: '',
       agent: 'OPENCODE',
       items: [
-        { kind: 'list', id: 'quick', label: 'Connect', description: 'Pick how to sign in from the provider’s menu.', rows: quick, emptyText: 'No providers yet' },
-        { kind: 'list', id: 'all', label: `All ${all.length} providers`, rows: all.map((i) => this.providerRow(i)), emptyText: 'No providers yet' },
+        // the app's Connect card: quick providers as tiles, then every provider behind a search (a tap asks how to sign in)
+        { kind: 'list', id: 'quick', label: 'Connect', rows: quick, emptyText: 'No providers yet', display: 'tiles', accent: 'opencode', icon: 'login' },
+        {
+          kind: 'list',
+          id: 'all',
+          label: `All ${all.length || ''} providers`,
+          rows: all.map((i) => this.providerRow(i)),
+          emptyText: 'No providers yet',
+          display: 'search',
+          searchTitle: 'Connect a provider',
+          accent: 'opencode',
+        },
       ],
     });
 
@@ -478,7 +492,8 @@ export class OpenCodeSettings implements AgentSettingsProvider {
 
   // --- Models in the picker (the app's ModelsCard)
 
-  private modelsPage(): SettingsPage {
+  /** The app's ModelsCard: every provider that has models, each with its switch and a switch per model. */
+  private modelsItem(): SettingItem {
     const hiddenModels = this.b.hiddenModels();
     const hiddenProviders = this.b.hiddenProviders();
     const groups = new Map<string, AiModel[]>();
@@ -486,47 +501,40 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       const pid = providerOf(m.id);
       groups.set(pid, [...(groups.get(pid) ?? []), m]);
     }
-    const sections: SettingsSection[] = [...groups]
-      .sort((x, y) => x[1][0].baseName.toLowerCase().localeCompare(y[1][0].baseName.toLowerCase()))
-      .map(([pid, models]) => {
-        const on = !hiddenProviders.has(pid);
-        const count = models.filter((m) => !hiddenModels.has(m.id)).length;
-        return {
-          id: `provider:${pid}`,
-          title: '',
-          agent: 'OPENCODE' as const,
-          items: [
-            { kind: 'toggle', id: `provider:${pid}`, label: models[0].baseName, description: on ? `${count} of ${models.length} models on` : `Off · ${models.length} models`, value: on },
-            {
-              kind: 'checklist',
-              id: `models:${pid}`,
-              label: 'Models',
-              values: models.filter((m) => !hiddenModels.has(m.id)).map((m) => m.id),
-              options: models.map((m) => ({ value: m.id, label: m.displayName, description: m.id.slice(pid.length + 1) })),
-              disabled: !on,
-            },
-            { kind: 'button', id: `allOn:${pid}`, label: 'All on', disabled: !on },
-            { kind: 'button', id: `allOff:${pid}`, label: 'All off', disabled: !on },
-          ] satisfies SettingItem[],
-        };
-      });
-    sections.unshift({
-      id: 'about',
-      title: '',
-      agent: 'OPENCODE',
-      items: [
+    return {
+      kind: 'modelGroups',
+      id: 'models',
+      label: 'Models',
+      description: 'Turn providers or single models off to keep them out of the model picker. Tap a provider to see its models.',
+      emptyText: this.b.modelsError ?? 'No models yet: connect a provider below (OpenCode\'s free models need none).',
+      accent: 'opencode',
+      groups: [...groups]
+        .sort((x, y) => x[1][0].baseName.toLowerCase().localeCompare(y[1][0].baseName.toLowerCase()))
+        .map(([pid, models]) => ({
+          id: pid,
+          name: models[0].baseName,
+          on: !hiddenProviders.has(pid),
+          models: models.map((m) => ({ id: m.id, name: m.displayName, detail: m.id.slice(pid.length + 1), on: !hiddenModels.has(m.id) })),
+        })),
+    };
+  }
+
+  private modelsPage(): SettingsPage {
+    return {
+      id: 'opencode.models',
+      title: 'Models',
+      sections: [
         {
-          kind: 'info',
-          id: 'about',
-          label: 'Model picker',
-          value: groups.size
-            ? 'Turn providers or single models off to keep them out of the model picker. This is kept by AntiGem only: OpenCode itself still has them.'
-            : (this.b.modelsError ?? 'No models yet'),
-          tone: 'muted',
+          id: 'models',
+          title: '',
+          agent: 'OPENCODE',
+          items: [
+            this.modelsItem(),
+            { kind: 'info', id: 'about', label: 'Kept by AntiGem', value: 'OpenCode itself still has the models you turn off here.', tone: 'muted' },
+          ],
         },
       ],
-    });
-    return { id: 'opencode.models', title: 'Models', sections };
+    };
   }
 
   private setModelsHidden(pid: string, ticked: Set<string>) {
@@ -744,6 +752,24 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       this.changed();
       return;
     }
+    if ((page === 'opencode.models' || page === 'opencode.providers') && id === 'models' && rowId) {
+      if (rowId.startsWith('provider:')) {
+        const pid = rowId.slice('provider:'.length);
+        const hidden = this.b.hiddenProviders();
+        if (value === true) hidden.delete(pid);
+        else hidden.add(pid);
+        this.b.store.set('opencode.hiddenProviders', [...hidden]);
+      } else if (rowId.startsWith('model:')) {
+        const mid = rowId.slice('model:'.length);
+        const hidden = this.b.hiddenModels();
+        if (value === true) hidden.delete(mid);
+        else hidden.add(mid);
+        this.b.store.set('opencode.hiddenModels', [...hidden]);
+      }
+      this.b.publishModels();
+      this.changed();
+      return;
+    }
     if (page === 'opencode.models') {
       if (id.startsWith('provider:')) {
         const pid = id.slice('provider:'.length);
@@ -773,6 +799,11 @@ export class OpenCodeSettings implements AgentSettingsProvider {
         this.changed();
         return STATE_LABELS[this.b.ocState];
       }
+      return;
+    }
+    if ((page === 'opencode.models' || page === 'opencode.providers') && id === 'models' && rowId && (actionId === 'allOn' || actionId === 'allOff')) {
+      this.setModelsHidden(rowId, new Set(actionId === 'allOn' ? this.b.allModels.map((m) => m.id).filter((m) => providerOf(m) === rowId) : []));
+      this.changed();
       return;
     }
     if (page === 'opencode.models') {
@@ -877,6 +908,13 @@ export class OpenCodeSettings implements AgentSettingsProvider {
       void this.b.loadModels();
       this.changed();
     };
+    if (id === 'accounts' && rowId && actionId?.startsWith('m:')) {
+      // Add account: rowId is "<provider>|<connection>"
+      const integ = (this.integrations ?? []).find((i) => i.id === rowId.slice(0, rowId.indexOf('|')));
+      const m = integ?.methods[Number(actionId.slice(2))];
+      if (!integ || !m) throw new Error('This provider is not available any more: reopen the page');
+      return this.connect(integ, m, values ?? {});
+    }
     if (id === 'accounts' && rowId) {
       const credId = rowId.slice(rowId.indexOf('|') + 1);
       const name = this.integrations?.find((i) => i.id === rowId.slice(0, rowId.indexOf('|')))?.name ?? 'the provider';

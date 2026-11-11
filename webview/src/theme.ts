@@ -1,18 +1,27 @@
-// Which theme is on screen. Like the app's ThemeManager: a mode (Auto / Light / Dark) plus the theme used for the light
-// side and the one for the dark side. Auto follows VS Code (body class vscode-light / -dark / -high-contrast[-light]),
-// or prefers-color-scheme in a browser; `?theme=light|dark` in the URL forces a side (dev).
+// Which theme is on screen. Like the app's ThemeManager: a mode (VS Code / Auto / Light / Dark) plus the theme used for
+// the light side and the one for the dark side. Auto follows VS Code's side (body class vscode-light / -dark /
+// -high-contrast[-light]), or prefers-color-scheme in a browser; `?theme=light|dark` in the URL forces a side (dev).
+// VS Code (the default) also takes VS Code's colors: a theme made live from the --vscode-* variables (outside VS Code,
+// where they are missing, it behaves like Auto).
 //
-// Shared view prefs (UiPrefs) from the host:  theme: 'auto' | 'light' | 'dark' | <theme id>,  lightTheme / darkTheme:
-// theme ids, customThemes: CustomThemeJson[]. Before the first uiPrefs arrive the defaults apply from the stylesheet.
+// Shared view prefs (UiPrefs) from the host:  theme: 'vscode' | 'auto' | 'light' | 'dark' | <theme id>,  lightTheme /
+// darkTheme: theme ids, customThemes: CustomThemeJson[]. Before the first uiPrefs arrive the defaults apply from the
+// stylesheet.
 import { createEffect, createMemo, createRoot, createSignal, on } from 'solid-js';
 import { host } from './host';
 import type { UiPrefs } from '@shared/protocol';
-import { BUILT_IN, cssVars, customFromJson, DARK_DEFAULT, LIGHT_DEFAULT, type AppTheme, type CustomThemeJson } from './themes';
+import { BUILT_IN, cssVars, customFromJson, DARK_DEFAULT, LIGHT_DEFAULT, vscodeTheme, type AppTheme, type CustomThemeJson } from './themes';
 
 export type ThemeMode = 'dark' | 'light';
-export type ModeSetting = 'auto' | 'light' | 'dark';
+export type ModeSetting = 'vscode' | 'auto' | 'light' | 'dark';
+const MODES = ['vscode', 'auto', 'light', 'dark'];
 
 const [systemSide, setSystemSide] = createSignal<ThemeMode>('dark');
+/** Bumped when VS Code changes its theme colors (the --vscode-* variables on <html>). */
+const [vscodeColors, setVscodeColors] = createSignal(0);
+/** Where the chat is: VS Code paints the side bar and editor tabs with different backgrounds. */
+const [surface, setSurface] = createSignal<'sidebar' | 'editor'>('sidebar');
+export const setThemeSurface = (kind: 'sidebar' | 'panel' | 'browser') => setSurface(kind === 'sidebar' ? 'sidebar' : 'editor');
 /** The shared prefs from the host (null until the first uiPrefs message). */
 export const [uiPrefs, setUiPrefsSignal] = createSignal<UiPrefs | null>(null);
 
@@ -36,16 +45,24 @@ const state = createRoot(() => {
   const allThemes = createMemo(() => [...BUILT_IN, ...customThemes()]);
   const find = (id: unknown) => (typeof id === 'string' ? allThemes().find((t) => t.id === id) : undefined);
 
-  /** Auto / Light / Dark ('theme' may also be a theme id: that theme, fixed). */
+  /** VS Code / Auto / Light / Dark ('theme' may also be a theme id: that theme, fixed). */
   const modeSetting = createMemo<ModeSetting>(() => {
     const t = uiPrefs()?.theme;
-    if (t === 'light' || t === 'dark' || t === 'auto' || t == null) return (t ?? 'auto') as ModeSetting;
+    if (t == null) return 'vscode';
+    if (MODES.includes(t)) return t as ModeSetting;
     const th = find(t);
-    return th ? (th.dark ? 'dark' : 'light') : 'auto';
+    return th ? (th.dark ? 'dark' : 'light') : 'vscode';
   });
   const side = createMemo<ThemeMode>(() => {
     const m = modeSetting();
-    return m === 'auto' ? systemSide() : m;
+    return m === 'auto' || m === 'vscode' ? systemSide() : m;
+  });
+  /** VS Code mode's theme, made from the editor's colors (null outside VS Code). */
+  const fromVscode = createMemo<AppTheme | null>(() => {
+    if (modeSetting() !== 'vscode') return null;
+    vscodeColors();
+    const css = getComputedStyle(document.documentElement);
+    return vscodeTheme(side() === 'dark', (n) => css.getPropertyValue(n), surface());
   });
   const lightId = createMemo(() => {
     const t = find(uiPrefs()?.theme);
@@ -59,8 +76,8 @@ const state = createRoot(() => {
     const d = find(uiPrefs()?.darkTheme);
     return d && d.dark ? d.id : DARK_DEFAULT;
   });
-  const current = createMemo(() => find(side() === 'dark' ? darkId() : lightId())!);
-  return { allThemes, modeSetting, side, lightId, darkId, current };
+  const current = createMemo(() => fromVscode() ?? find(side() === 'dark' ? darkId() : lightId())!);
+  return { allThemes, modeSetting, side, lightId, darkId, current, fromVscode };
 });
 
 export const allThemes = state.allThemes;
@@ -68,6 +85,8 @@ export const themeModeSetting = state.modeSetting;
 export const lightThemeId = state.lightId;
 export const darkThemeId = state.darkId;
 export const currentTheme = state.current;
+/** VS Code mode is showing the editor's own colors (false outside VS Code, where it acts like Auto). */
+export const matchingVscode = () => !!state.fromVscode();
 /** The side on screen ('dark' | 'light'). */
 export const themeMode = state.side;
 
@@ -90,7 +109,7 @@ function apply() {
 
 /** A local change before the host echoes it (optimistic). */
 export function patchUiPrefs(patch: Partial<UiPrefs>) {
-  setUiPrefsSignal((p) => ({ theme: 'auto', ...(p ?? {}), ...patch }) as UiPrefs);
+  setUiPrefsSignal((p) => ({ theme: 'vscode', ...(p ?? {}), ...patch }) as UiPrefs);
 }
 
 export function initTheme() {
@@ -111,8 +130,24 @@ export function initTheme() {
       }),
     );
   });
-  const update = () => setSystemSide(detectSystem());
+  const update = () => {
+    setSystemSide(detectSystem());
+    setVscodeColors((n) => n + 1);
+  };
   new MutationObserver(update).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  // VS Code rewrites its color variables on <html> when the user switches themes (no reload); our own theme
+  // variables go there too, so only a change to a --vscode-* value counts
+  let lastVscode = '';
+  new MutationObserver(() => {
+    const st = document.documentElement.getAttribute('style') ?? '';
+    const vs = st
+      .split(';')
+      .filter((d) => d.trim().startsWith('--vscode-'))
+      .join(';');
+    if (vs === lastVscode) return;
+    lastVscode = vs;
+    setVscodeColors((n) => n + 1);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', update);
 }
 

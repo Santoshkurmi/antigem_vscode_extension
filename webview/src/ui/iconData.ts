@@ -122,6 +122,7 @@ import i_link from '@material-design-icons/svg/outlined/link.svg?raw';
 import i_api from '@material-design-icons/svg/outlined/api.svg?raw';
 import i_account from '@material-design-icons/svg/outlined/account_circle.svg?raw';
 import i_logout from '@material-design-icons/svg/outlined/logout.svg?raw';
+import i_login from '@material-design-icons/svg/outlined/login.svg?raw';
 import i_delete_o from '@material-design-icons/svg/outlined/delete.svg?raw';
 import i_sync from '@material-design-icons/svg/outlined/sync.svg?raw';
 import i_storage from '@material-design-icons/svg/outlined/storage.svg?raw';
@@ -175,6 +176,7 @@ const raw = {
   api: i_api,
   account: i_account,
   logout: i_logout,
+  login: i_login,
   delete_o: i_delete_o,
   sync: i_sync,
   storage: i_storage,

@@ -73,7 +73,17 @@ export class Tasks {
    * Starts [goal] in a new chat of [agent]. [projectPath] null = the active project. [owner] gets the task's news,
    * [brief] goes hidden in front of the goal (how a sub-agent of Jarvis works, the team's role). Returns the task.
    */
-  async start(agent: AgentKind, goal: string, title: string | null, modelId: string | null, projectPath: string | null, owner: string, team: string, brief: string | null): Promise<Task> {
+  async start(
+    agent: AgentKind,
+    goal: string,
+    title: string | null,
+    modelId: string | null,
+    projectPath: string | null,
+    owner: string,
+    team: string,
+    brief: string | null,
+    controls: { effort?: string | null; thinking?: boolean | null } = {},
+  ): Promise<Task> {
     const text = goal.trim();
     if (!text) throw new Error('The task needs a goal.');
     const b = this.j.host.backend(agent);
@@ -89,7 +99,16 @@ export class Tasks {
     this.j.driver.watch(id, HOLD, agent);
     this.attachedAt.set(id, Date.now());
     try {
-      await b.send({ conversationId: id, isNew: true, text: prompt, attachments: [], modelId: modelId || null, workspaceUri: ws ? (ws.startsWith('file://') ? ws : `file://${ws}`) : null });
+      await b.send({
+        conversationId: id,
+        isNew: true,
+        text: prompt,
+        attachments: [],
+        modelId: modelId || null,
+        workspaceUri: ws ? (ws.startsWith('file://') ? ws : `file://${ws}`) : null,
+        effort: controls.effort ?? null,
+        thinking: controls.thinking ?? null,
+      });
     } catch (e) {
       this.j.driver.release(id, HOLD);
       throw e;

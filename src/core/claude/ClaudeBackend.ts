@@ -747,15 +747,17 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   /** The controls a chat started now gets (then the new-chat screen starts from the defaults again). */
-  private takeNewChatControls(modelId: string | null): NewChatControls {
+  private takeNewChatControls(modelId: string | null, req?: Pick<SendRequest, 'effort' | 'thinking'>): NewChatControls {
     const n = this.newChat;
+    // a caller's own effort / thinking (a Jarvis task) wins over the new-chat screen's chips
+    const effort = req?.effort != null ? (req.effort === 'default' ? null : req.effort) : n.effort !== undefined ? n.effort : this.chatDefaults.effort;
     const c: NewChatControls = {
       model: modelId ?? this.pickerModel ?? this.chatDefaults.model ?? 'default',
-      effort: n.effort !== undefined ? n.effort : this.chatDefaults.effort,
-      thinking: n.thinking ?? this.chatDefaults.thinking,
+      effort,
+      thinking: req?.thinking ?? n.thinking ?? this.chatDefaults.thinking,
       permissionMode: n.mode ?? this.defaultPermissionMode,
       modeTouched: n.mode !== undefined,
-      controlsTouched: n.effort !== undefined || n.thinking !== undefined || modelId != null,
+      controlsTouched: n.effort !== undefined || n.thinking !== undefined || modelId != null || req?.effort != null || req?.thinking != null,
     };
     this.newChat = {};
     if (n.touched) this.changed('controls');
@@ -879,6 +881,27 @@ export class ClaudeBackend implements AgentBackend {
     return this.subConvs.get(convId)?.isRunning === true;
   }
 
+  private subPollTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+
+  /** A subagent was just started in chat [sessionId]: fetch its subagent list a few times over the next seconds. */
+  pollSubagentsSoon(sessionId: string) {
+    for (const t of this.subPollTimers.get(sessionId) ?? []) clearTimeout(t);
+    this.subPollTimers.set(
+      sessionId,
+      [1_500, 5_000, 12_000].map((ms) =>
+        setTimeout(async () => {
+          if (this.disposed) return;
+          try {
+            const r = await this.bridgeJson(`/api/claude/sessions/${sessionId}/subagents`, {}, 15_000);
+            if (r?.success) this.applySessionSubagents(sessionId, Array.isArray(r.subagents) ? r.subagents : []);
+          } catch {
+            // the bridge is down: the backend shows that
+          }
+        }, ms),
+      ),
+    );
+  }
+
   /** A fresher subagent list of one chat (its open view polls it). */
   applySessionSubagents(sessionId: string, list: SubagentWire[]) {
     const before = JSON.stringify(this.subLists.get(sessionId) ?? []);
@@ -900,7 +923,8 @@ export class ClaudeBackend implements AgentBackend {
   private rebuildSubConvs() {
     const next = new Map<string, Conversation>();
     for (const [sessionId, list] of this.subLists) {
-      const parent = this.convs.get(sessionId);
+      // a chat started here is only known locally until the bridge lists it
+      const parent = this.convs.get(sessionId) ?? this.localConvs.get(sessionId);
       if (!parent) continue;
       for (const w of list) {
         if (!w?.agent_id) continue;
@@ -1127,7 +1151,7 @@ export class ClaudeBackend implements AgentBackend {
     if (parseSubagentId(req.conversationId)) throw new Error('A subagent takes instructions from its parent chat only');
     const s = this.session(req.conversationId);
     const known = this.conversation(req.conversationId);
-    if (!this.isOnDisk(s.id) && !s.prepared && s.transcript.isEmpty && !s.historyLoaded) s.prepareNewChat(this.takeNewChatControls(req.modelId));
+    if (!this.isOnDisk(s.id) && !s.prepared && s.transcript.isEmpty && !s.historyLoaded) s.prepareNewChat(this.takeNewChatControls(req.modelId, req));
     const typed = collapseExpansions(req.text).trim();
     if (!req.attachments.length && (await this.appCommand(s, typed))) return;
     if (!known) {

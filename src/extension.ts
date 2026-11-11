@@ -22,11 +22,34 @@ import { AgyBackend } from './core/agy/AgyBackend';
 import { CodexBackend } from './core/codex/CodexBackend';
 import { ClaudeBackend } from './core/claude/ClaudeBackend';
 import { OpenCodeBackend } from './core/opencode/OpenCodeBackend';
+import { PreviewServer } from './core/preview/server';
 import type { AgentKind, ChatAttachment } from '../shared/model';
 import type { EditorContextView, FileSuggestion, HostToView, ViewToHost } from '../shared/protocol';
 
 let host: AppHost | undefined;
 let sidebarViewId: string | undefined;
+/** Interactive Apps, local videos and YouTube embeds play from this local server (webview CSP: frame-src, media-src). */
+const preview = new PreviewServer();
+let previewReady: Promise<void> | null = null;
+/** Chats open in editor tabs (the drawer's ⏻ closes them). */
+const chatPanels = new Set<vscode.WebviewPanel>();
+/** The drawer's ⏻ closed AntiGem: opening its view again starts it (like opening the app again). */
+let closedByPower = false;
+
+/** Hides the AntiGem view: closes the side bar it is shown in. */
+async function hideAntiGemView() {
+  const wait = () => new Promise((r) => setTimeout(r, 250));
+  if (!sidebarView?.visible) return;
+  // the view lives in the primary side bar unless the user moved it
+  await vscode.commands.executeCommand('workbench.action.closeSidebar');
+  await wait();
+  if (!sidebarView?.visible) return;
+  // it is in the secondary side bar (or the panel): give the primary side bar back and close that one instead
+  await vscode.commands.executeCommand('workbench.action.toggleSidebarVisibility');
+  await vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+  await wait();
+  if (sidebarView?.visible) await vscode.commands.executeCommand('workbench.action.closePanel');
+}
 let sidebarView: vscode.WebviewView | undefined;
 
 const MAX_SELECTION = 40_000;
@@ -39,7 +62,8 @@ function webviewHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
   const csp = [
     "default-src 'none'",
     `img-src ${webview.cspSource} data: blob: https:`,
-    `media-src ${webview.cspSource} data: blob:`,
+    `media-src ${webview.cspSource} data: blob: https:${preview.port ? ` ${preview.origin()}` : ''}`,
+    ...(preview.port ? [`frame-src ${preview.origin()}`] : []),
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `font-src ${webview.cspSource} data:`,
     `script-src 'nonce-${nonce}' ${webview.cspSource}`,
@@ -76,12 +100,16 @@ function openChatPanel(context: vscode.ExtensionContext, conversationId: string 
     localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist'), vscode.Uri.joinPath(context.extensionUri, 'media')],
   });
   panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
+  chatPanels.add(panel);
   const disposables: vscode.Disposable[] = [];
-  panel.webview.html = webviewHtml(panel.webview, context.extensionUri);
+  void (previewReady ?? Promise.resolve()).then(() => {
+    panel.webview.html = webviewHtml(panel.webview, context.extensionUri);
+  });
   const id = connectWebview(panel.webview, 'panel', conversationId, disposables, (t) => {
     panel.title = t.length > 40 ? `${t.slice(0, 40)}…` : t;
   });
   panel.onDidDispose(() => {
+    chatPanels.delete(panel);
     host?.detachView(id);
     disposables.forEach((d) => d.dispose());
   });
@@ -217,10 +245,14 @@ export function activate(context: vscode.ExtensionContext) {
       return out.sort((a, b) => score(a) - score(b)).slice(0, 60);
     },
     openInEditor: (id) => openChatPanel(context, id),
-    confirm: async (m) => (await vscode.window.showWarningMessage(m, { modal: true }, 'Delete')) === 'Delete',
+    confirm: async (m, action = 'Delete') => (await vscode.window.showWarningMessage(m, { modal: true }, action)) === action,
     prompt: (m, v) => Promise.resolve(vscode.window.showInputBox({ prompt: m, value: v })),
     powerOff: async () => {
       await bridge.powerOff();
+      // like closing the app: its chats in editor tabs and its view close too; opening AntiGem again starts it
+      closedByPower = true;
+      for (const p of [...chatPanels]) p.dispose();
+      await hideAntiGemView();
     },
     powerOn: () => bridge.resume(),
     isOff: () => bridge.suspended,
@@ -300,6 +332,20 @@ export function activate(context: vscode.ExtensionContext) {
     },
   };
 
+  // the preview server's address as the webview reaches it (VS Code forwards the port when this runs remotely)
+  preview.log = log;
+  previewReady = (async () => {
+    try {
+      // the same port as last time when it is free: Interactive Apps keep their localStorage
+      const port = await preview.start(kv.get<number>('preview.port') ?? 1247);
+      kv.set('preview.port', port);
+      const ext = await vscode.env.asExternalUri(vscode.Uri.parse(`http://127.0.0.1:${preview.port}`));
+      preview.base = ext.toString(true).replace(/\/$/, '');
+    } catch (e) {
+      log(`[preview] not available: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  })();
+
   const opts = { openUrl: platform.openUrl, openFile: platform.openFile };
   host = new AppHost(
     {
@@ -312,7 +358,9 @@ export function activate(context: vscode.ExtensionContext) {
     log,
     kv,
   );
-
+  void previewReady.then(() => {
+    if (host && preview.port) host.preview = preview;
+  });
 
   // ---- built-in MCP servers (notes, theme…) — the app's local bridge server, one path per server
   let deviceId = kv.get<string>('mcp.deviceId');
@@ -388,16 +436,26 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider(
       'antigem.chat',
       {
-        resolveWebviewView(view) {
+        async resolveWebviewView(view) {
           sidebarView = view;
           view.webview.options = {
             enableScripts: true,
             localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist'), vscode.Uri.joinPath(context.extensionUri, 'media')],
           };
+          await previewReady;
           view.webview.html = webviewHtml(view.webview, context.extensionUri);
           const disposables: vscode.Disposable[] = [];
           const id = connectWebview(view.webview, 'sidebar', null, disposables);
           sidebarViewId = id;
+          disposables.push(
+            view.onDidChangeVisibility(() => {
+              // opened again after the drawer's ⏻: start the bridge and the agents again
+              if (view.visible && closedByPower) {
+                closedByPower = false;
+                host?.reconnect();
+              }
+            }),
+          );
           view.onDidDispose(() => {
             host?.detachView(id);
             disposables.forEach((d) => d.dispose());
@@ -428,6 +486,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('antigem.showLogs', () => output.show()),
     { dispose: () => mcp.stop() },
+    { dispose: () => preview.stop() },
     { dispose: () => browserBridge.stop() },
     { dispose: () => host?.dispose() },
   );

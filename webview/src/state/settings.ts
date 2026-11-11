@@ -131,6 +131,16 @@ export function changeSetting(pageId: string, itemId: string, value: unknown, ro
     } else if (it.kind === 'toggle') it.value = !!value;
     else if (it.kind === 'select' || it.kind === 'text') it.value = String(value);
     else if (it.kind === 'checklist' && Array.isArray(value)) it.values = value.map(String);
+    else if (it.kind === 'modelGroups' && rowId) {
+      // provider:<group id> or model:<model id>
+      const on = !!value;
+      if (rowId.startsWith('provider:')) {
+        const g = it.groups.find((x) => x.id === rowId.slice(9));
+        if (g) g.on = on;
+      } else if (rowId.startsWith('model:')) {
+        for (const g of it.groups) for (const m of g.models) if (m.id === rowId.slice(6)) m.on = on;
+      }
+    }
   });
   host.send({ type: 'settingChange', page: pageId, id: itemId, value, rowId });
 }

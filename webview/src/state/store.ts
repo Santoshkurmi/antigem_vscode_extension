@@ -29,7 +29,7 @@ import type {
   WorkspaceFolder,
 } from '@shared/protocol';
 import { host } from '../host';
-import { patchUiPrefs, setUiPrefsSignal, uiPrefs } from '../theme';
+import { patchUiPrefs, setThemeSurface, setUiPrefsSignal, uiPrefs } from '../theme';
 import { jarvisDraft, setJarvisDraft } from './jarvis';
 
 export interface ChatState {
@@ -152,6 +152,7 @@ const listeners = {
   projects: new Map<string, (p: ProjectView[]) => void>(),
   folder: new Map<string, (p: ProjectView | null) => void>(),
   image: new Map<string, (d: string | null) => void>(),
+  media: new Map<string, (r: { url: string | null; error: string | null }) => void>(),
   chatSearch: new Map<string, (r: ChatSearchHit[]) => void>(),
 };
 
@@ -269,6 +270,7 @@ function onHostMessage(msg: HostToView) {
           defaultAgent: msg.defaultAgent,
         });
         setFirstRun(!!msg.firstRun);
+        setThemeSurface(msg.viewKind);
         if (!state.chat.conversationId && !state.chat.order.length) {
           setState('chat', emptyChat(msg.conversationId, msg.defaultAgent));
           if (msg.conversationId) setState('chat', 'isLoading', true);
@@ -333,6 +335,12 @@ function onHostMessage(msg: HostToView) {
       const cb = listeners.folder.get(msg.reqId);
       listeners.folder.delete(msg.reqId);
       cb?.(msg.project);
+      break;
+    }
+    case 'mediaUrl': {
+      const cb = listeners.media.get(msg.reqId);
+      listeners.media.delete(msg.reqId);
+      cb?.({ url: msg.url, error: msg.error ?? null });
       break;
     }
     case 'imageData': {
@@ -556,6 +564,21 @@ export function pickAttachments(cb: (a: ChatAttachment[]) => void) {
   const reqId = uuid();
   listeners.attachments.set(reqId, cb);
   send({ type: 'pickAttachments', reqId });
+}
+
+/**
+ * An address the chat can frame / play, from the host's local preview server: an Interactive App's HTML, an app's
+ * .html file, a local video or a YouTube id. Rejects with the reason when it cannot be served.
+ */
+export function mediaUrl(kind: 'html' | 'htmlFile' | 'file' | 'youtube', value: string, start?: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reqId = uuid();
+    listeners.media.set(reqId, (r) => (r.url ? resolve(r.url) : reject(new Error(r.error || 'Cannot show it here'))));
+    send({ type: 'mediaUrl', reqId, kind, value, ...(start ? { start } : {}) });
+    setTimeout(() => {
+      if (listeners.media.delete(reqId)) reject(new Error('No answer from the extension'));
+    }, 15000);
+  });
 }
 
 const imageCache = new Map<string, Promise<string | null>>();

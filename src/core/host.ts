@@ -11,6 +11,7 @@ import type { JarvisHooks, JarvisHostApi } from './jarvis/types';
 import type { BrowserHooks } from './browser/settings';
 import type { PluginHooks } from './plugins/types';
 import { selectionBlock } from './text';
+import type { PreviewServer } from './preview/server';
 import type { AgentBackend, ChatState, KeyValueStore, Logger } from './types';
 
 /** What the embedding environment (VS Code or the dev server) provides. */
@@ -33,7 +34,8 @@ export interface Platform {
   /** Open a file and select a line range. */
   revealRange(path: string, startLine: number, endLine: number): void;
   openInEditor(conversationId: string): void;
-  confirm(message: string): Promise<boolean>;
+  /** A modal yes / no; [action] = the yes button's label (default "Delete"). */
+  confirm(message: string, action?: string): Promise<boolean>;
   prompt(message: string, value: string): Promise<string | undefined>;
   /** Stops and starts the bridge again (its hub too). */
   restartBridge(): Promise<void>;
@@ -90,6 +92,8 @@ export class AppHost {
   private views = new Map<string, ViewState>();
   private unsubs: Array<() => void> = [];
   private settings: HostSettings;
+  /** Local server for Interactive Apps, local videos and YouTube embeds (set by the embedder; absent = not shown). */
+  preview: PreviewServer | null = null;
   private editorCtx: EditorContextView | null = null;
   /** The view the user interacted with last (VS Code commands deliver chips there). */
   private lastActive: string | null = null;
@@ -101,6 +105,13 @@ export class AppHost {
     private store: KeyValueStore,
   ) {
     this.settings = new HostSettings(store);
+    // once: the default look became "VS Code" (its own theme colors). Saved prefs always carry the mode (any pref
+    // change saves them whole), so an install that was on the old default Auto moves to the new default.
+    const saved = store.get<Record<string, unknown>>('ui.prefs');
+    if (saved && !store.get<boolean>('ui.themeDefaultVscode')) {
+      if (saved.theme == null || saved.theme === 'auto') store.set('ui.prefs', { ...saved, theme: 'vscode' });
+    }
+    store.set('ui.themeDefaultVscode', true);
     for (const b of Object.values(this.backends)) {
       if (!b) continue;
       this.unsubs.push(
@@ -121,6 +132,15 @@ export class AppHost {
       b.setNotifier?.((level, message) => this.broadcast({ type: 'toast', level, message }));
       if (this.isEnabled(b.kind)) b.start();
     }
+  }
+
+  /** Starts the bridge again after the drawer's ⏻ (Reconnect, or the view opened again) and retries every agent. */
+  reconnect() {
+    if (this.platform.isOff()) {
+      this.platform.powerOn();
+      this.broadcast({ type: 'agents', agents: this.agentStatuses() });
+    }
+    for (const b of this.active()) b.retry();
   }
 
   /** Sends a message to every view. */
@@ -227,6 +247,7 @@ export class AppHost {
       refreshSettings: () => this.refreshSettings(),
       expand: (t) => this.settings.expand(t),
       contextEntries: () => this.settings.contextEntries(),
+      builtInContext: (h) => (this.settings.builtInEnabled() ? this.settings.builtInText(h) : null),
       uiPrefs: () => this.getUiPrefs(),
       patchUiPrefs: (p) => this.patchUiPrefs(p),
       editorContext: () => this.editorCtx,
@@ -555,7 +576,8 @@ export class AppHost {
   }
 
   private uiPrefs(): UiPrefs {
-    return { theme: 'auto', ...(this.store.get<Partial<UiPrefs>>('ui.prefs') ?? {}) } as UiPrefs;
+    // the default look matches VS Code's own theme
+    return { theme: 'vscode', ...(this.store.get<Partial<UiPrefs>>('ui.prefs') ?? {}) } as UiPrefs;
   }
 
   private agentStatuses() {
@@ -808,7 +830,7 @@ export class AppHost {
         await backend.send({
           conversationId: msg.conversationId,
           isNew: msg.isNew,
-          text: jarvisText ?? this.settings.wrap(expanded, msg.isNew),
+          text: jarvisText ?? this.settings.wrap(expanded, msg.isNew, msg.conversationId),
           attachments: others,
           modelId: msg.modelId,
           workspaceUri: msg.workspaceUri ?? this.platform.workspaceFolders()[0]?.uri ?? null,
@@ -972,17 +994,20 @@ export class AppHost {
         return;
       }
       case 'retryConnections':
-        if (this.platform.isOff()) {
-          this.platform.powerOn();
-          this.broadcast({ type: 'agents', agents: this.agentStatuses() });
-        }
-        for (const b of this.active()) b.retry();
+        this.reconnect();
         return;
       case 'powerOff': {
-        if (!(await this.platform.confirm('Turn AntiGem off? The bridge and every agent stop (running chats are stopped).'))) return;
+        if (
+          !(await this.platform.confirm(
+            'Turn AntiGem off? The bridge and every agent stop (running chats are stopped) and AntiGem closes. Open AntiGem again to start it.',
+            'Turn off',
+          ))
+        )
+          return;
+        // the toast first: the view may close with the power-off
+        this.broadcast({ type: 'toast', level: 'info', message: 'AntiGem is off — open it again (or press Reconnect) to start it' });
         await this.platform.powerOff();
         this.broadcast({ type: 'agents', agents: this.agentStatuses() });
-        this.broadcast({ type: 'toast', level: 'info', message: 'AntiGem is off — Reconnect starts it again' });
         return;
       }
       case 'toolAction':
@@ -1011,6 +1036,26 @@ export class AppHost {
           dataUrl = null;
         }
         v.port.post({ type: 'imageData', reqId: msg.reqId, dataUrl });
+        return;
+      }
+      case 'mediaUrl': {
+        const srv = this.preview;
+        let url: string | null = null;
+        let error: string | null = null;
+        try {
+          if (!srv) throw new Error('Previews are not available here');
+          url =
+            msg.kind === 'html'
+              ? srv.html(msg.value)
+              : msg.kind === 'htmlFile'
+                ? srv.htmlFile(msg.value)
+                : msg.kind === 'file'
+                  ? srv.file(msg.value)
+                  : srv.youtube(msg.value, msg.start ?? 0);
+        } catch (e) {
+          error = e instanceof Error ? (/ENOENT/.test(e.message) ? 'File not found' : e.message) : String(e);
+        }
+        v.port.post({ type: 'mediaUrl', reqId: msg.reqId, url, error });
         return;
       }
       case 'resolveDrop': {

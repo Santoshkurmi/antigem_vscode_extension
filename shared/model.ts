@@ -65,6 +65,10 @@ export interface ToolCall {
   questionnaire?: ChoiceQuestionnaire | null;
   /** A subagent run (Claude Agent/Task tool): the conversation that shows its own transcript (in the drawer under the chat). */
   subagentConversationId?: string | null;
+  /** The agent's own verb for a tool the card has no type for ("Checked", "Messaged"); shown instead of a generic one. */
+  label?: string | null;
+  /** The agent's own icon name for such a tool (Material name, e.g. task_alt, send, schedule). */
+  icon?: string | null;
 }
 
 export interface TokenUsage {

@@ -2,7 +2,7 @@
 // ui/settings/ThemeQuickPanel.kt (the floating switcher opened from the drawer).
 import { createEffect, createMemo, createSignal, For, on, onMount, Show } from 'solid-js';
 import { DARK_DEFAULT, hex, LIGHT_DEFAULT, resolveTheme, type AppTheme } from '../themes';
-import { allThemes, currentTheme, darkThemeId, lightThemeId, themeMode, themeModeSetting, uiPrefs, type ModeSetting } from '../theme';
+import { allThemes, currentTheme, darkThemeId, lightThemeId, matchingVscode, themeMode, themeModeSetting, uiPrefs, type ModeSetting } from '../theme';
 import { setThemePanelOpen, setUiPref, themePanelOpen } from '../state/settings';
 import { Dialog, Icon, IconButton, type IconName } from '../ui/primitives';
 import { alpha } from '../util/format';
@@ -12,7 +12,9 @@ export function pickTheme(t: AppTheme) {
   setUiPref(t.dark ? 'darkTheme' : 'lightTheme', t.id);
   const mode = themeModeSetting();
   const want = t.dark ? 'dark' : 'light';
-  if (mode !== 'auto' && mode !== want) setUiPref('theme', want);
+  // picking a theme while matching VS Code: keep following VS Code's light / dark side, with this theme's colors
+  if (mode === 'vscode') setUiPref('theme', 'auto');
+  else if (mode !== 'auto' && mode !== want) setUiPref('theme', want);
   // a theme id in `theme` would pin the old one: keep `theme` a mode
   else if (mode === 'auto' && uiPrefs()?.theme && !['auto', 'light', 'dark'].includes(String(uiPrefs()?.theme))) setUiPref('theme', 'auto');
 }
@@ -89,10 +91,20 @@ export function ThemeCard(props: { theme: AppTheme; selected: boolean; cardBg: s
 export function ThemesPage() {
   const [toDelete, setToDelete] = createSignal<AppTheme | null>(null);
   const modes: [ModeSetting, string, IconName][] = [
-    ['auto', 'Auto (VS Code)', 'brightness_auto'],
+    ['vscode', 'VS Code', 'code'],
+    ['auto', 'Auto', 'brightness_auto'],
     ['light', 'Light', 'light_mode_o'],
     ['dark', 'Dark', 'dark_mode'],
   ];
+  const vscode = () => themeModeSetting() === 'vscode';
+  const modeHint = () =>
+    vscode()
+      ? matchingVscode()
+        ? "Uses your VS Code theme's colors and follows it when you switch. Pick a theme below to use AntiGem's colors instead."
+        : 'Outside VS Code this works like Auto.'
+      : themeModeSetting() === 'auto'
+        ? "Light or dark follows VS Code; the colors are the themes picked below."
+        : null;
   const deleteCustom = (t: AppTheme) => {
     const list = (uiPrefs()?.customThemes as { id: string }[] | undefined) ?? [];
     setUiPref('customThemes', list.filter((x) => x.id !== t.id));
@@ -112,11 +124,14 @@ export function ThemesPage() {
           )}
         </For>
       </div>
-      <div class="gallery">
+      <Show when={modeHint()}>
+        <div class="gallery-hint mode-hint">{modeHint()}</div>
+      </Show>
+      <div class="gallery" classList={{ dimmed: vscode() && matchingVscode() }}>
         <GalleryHeader title="Light theme" hint="Used in Light mode, and by Auto when VS Code is light." />
-        <ThemeGrid themes={allThemes().filter((t) => !t.dark)} selected={lightThemeId()} onDelete={setToDelete} />
+        <ThemeGrid themes={allThemes().filter((t) => !t.dark)} selected={vscode() && matchingVscode() ? '' : lightThemeId()} onDelete={setToDelete} />
         <GalleryHeader title="Dark theme" hint="Used in Dark mode, and by Auto when VS Code is dark." />
-        <ThemeGrid themes={allThemes().filter((t) => t.dark)} selected={darkThemeId()} onDelete={setToDelete} />
+        <ThemeGrid themes={allThemes().filter((t) => t.dark)} selected={vscode() && matchingVscode() ? '' : darkThemeId()} onDelete={setToDelete} />
         <div class="gallery-note">
           Make your own: add the Theme preset in MCP Servers and ask any chat, e.g. “create a neon cyberpunk dark theme and apply
           it”.
@@ -180,7 +195,7 @@ function ThemeGrid(props: { themes: AppTheme[]; selected: string; onDelete: (t: 
 /** ThemeQuickPanel: a floating strip of the side's themes; a tap applies at once, the app changes behind it. */
 export function ThemeQuickPanel() {
   const dark = () => themeMode() === 'dark';
-  const selectedId = () => (dark() ? darkThemeId() : lightThemeId());
+  const selectedId = () => (themeModeSetting() === 'vscode' && matchingVscode() ? '' : dark() ? darkThemeId() : lightThemeId());
   const themes = () => allThemes().filter((t) => t.dark === dark());
   let list: HTMLDivElement | undefined;
   const scrollToSelected = () => {
@@ -191,9 +206,10 @@ export function ThemeQuickPanel() {
   // show the theme in use (with one neighbour before it) when the side changes
   createEffect(on(themeMode, () => requestAnimationFrame(() => requestAnimationFrame(scrollToSelected)), { defer: true }));
   const options: [ModeSetting, string, IconName][] = [
+    ['vscode', 'VS Code', 'code'],
+    ['auto', 'Auto', 'brightness_auto'],
     ['light', 'Light', 'light_mode_o'],
     ['dark', 'Dark', 'dark_mode'],
-    ['auto', 'Auto', 'brightness_auto'],
   ];
   return (
     <Show when={themePanelOpen()}>
@@ -208,10 +224,11 @@ export function ThemeQuickPanel() {
                 <button
                   class="mode-pill"
                   classList={{ on: themeModeSetting() === mode }}
+                  title={label}
                   onClick={() => setThemeMode(mode)}
                 >
                   <Icon name={icon} size={13} />
-                  <span>{label}</span>
+                  <span class="mode-pill-label">{label}</span>
                 </button>
               )}
             </For>

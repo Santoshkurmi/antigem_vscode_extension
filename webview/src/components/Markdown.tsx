@@ -11,6 +11,7 @@ import { MermaidBlock } from './Mermaid';
 import { MarkdownImage, VideoLinkCard, YouTubeCard } from './Media';
 import { openSettings } from '../state/settings';
 import { CodeBlock } from './CodeBlock';
+import { InteractiveAppBlock } from './InteractiveApp';
 import { ToolCallCard } from './ToolCallCard';
 import { ThinkingAccordion } from './Thinking';
 import { copyText } from '../state/store';
@@ -118,7 +119,10 @@ export function BlockView(props: {
         </Show>
       </Match>
       <Match when={b().t === 'ui'}>
-        <CodeBlock code={as('ui').html} lang="html" complete={!props.streaming} />
+        {/* a streaming app is shown as code until it is complete (a half page would run half its script) */}
+        <Show when={!props.streaming} fallback={<CodeBlock code={as('ui').html} lang="html" complete={false} />}>
+          <InteractiveAppBlock code={as('ui').html} />
+        </Show>
       </Match>
       <Match when={b().t === 'img'}>
         <MarkdownImage src={as('img').url} alt={as('img').alt} />

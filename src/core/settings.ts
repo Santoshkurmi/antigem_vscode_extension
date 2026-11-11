@@ -28,6 +28,10 @@ const TOKEN_RE = /(?<=^|\s)\/([A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
 // custom command
 const PLU_TOKEN_RE = /(?<=^|\s)\/(plu:[A-Za-z0-9_-]+(?::[A-Za-z0-9._-]*)?|[A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
 
+const MAX_REMEMBERED_CHATS = 600;
+
+const entriesBlock = (list: ContextEntry[]) => list.map((e) => (e.title.trim() ? `### ${e.title.trim()}\n` : '') + e.text.trim()).join('\n\n');
+
 const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const block = (command: string, body: string) => `<antigem-expansion command="${escapeAttr(command)}">\n${body}\n</antigem-expansion>`;
 
@@ -98,19 +102,92 @@ export class HostSettings {
     this.store.set('global.context', list);
   }
 
-  /** Adds the global context as a hidden note: first-message entries on a new chat, every-message entries always. */
-  wrap(text: string, isNew: boolean): string {
-    const active = this.contextEntries().filter((e) => e.enabled && e.text.trim());
-    const first = isNew ? active.filter((e) => !e.everyMessage) : [];
-    const every = active.filter((e) => e.everyMessage);
-    if (!first.length && !every.length) return text;
-    const fmt = (e: ContextEntry) => (e.title.trim() ? `${e.title.trim()}:\n${e.text.trim()}` : e.text.trim());
+  // ---------------------------------------------------------------- the built-in context (GlobalContext.builtInText)
+
+  /** The built-in context (how to show things in this chat) is on unless the user turned it off. */
+  builtInEnabled(): boolean {
+    return this.store.get<boolean>('global.context.builtin') !== false;
+  }
+
+  /** What the extension tells every chat about itself; [h] = the heading level of its section. */
+  builtInText(h = '##'): string {
+    return [
+      `${h} Showing things in this chat`,
+      'The user reads you in AntiGem (a chat inside VS Code). Besides Markdown it renders these, each on its own line (absolute paths, no spaces):',
+      '- Image: `![caption](/abs/path/pic.png)` (or an https URL)',
+      '- Video: `![caption](/abs/path/clip.mp4)` (mp4, webm, mov: plays in the chat) · YouTube: `![title](https://www.youtube.com/watch?v=VIDEO_ID)` (a card that opens it in the browser)',
+      '- File: `[name](/abs/path/file.ext)` (the user clicks to open it in the editor)',
+      '- Diagram: a ```mermaid code block is drawn as a diagram (flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline…)',
+      '- Math: LaTeX in `$…$` inline or `$$…$$` as a block',
+      '- Live web page / mini app: a ```html_app code block runs as an interactive page in the chat (one HTML document: CSS in <style>, ' +
+        'JS in <script>; CDN scripts, fonts and images load). For a site of several files on disk, put only the absolute path of its .html ' +
+        'file in the block: its CSS, JS and images load from that folder. It runs sandboxed in its own origin: localStorage, ' +
+        'sessionStorage, IndexedDB, cookies, fetch to APIs that allow CORS, canvas, WebGL, audio and forms work; alert(), confirm(), ' +
+        'prompt() and window.open() / new tabs do NOT (show messages and dialogs inside the page instead); it cannot reach local files, ' +
+        'the chat or the editor.',
+      'Show the images, videos, diagrams and pages you make this way instead of only naming the path.',
+    ].join('\n');
+  }
+
+  /** The first-message context of a normal chat, or null when there is nothing to send. */
+  private firstMessageBody(): string | null {
+    const parts: string[] = [];
+    if (this.builtInEnabled()) parts.push(this.builtInText());
+    const own = this.activeEntries().filter((e) => !e.everyMessage);
+    if (own.length) parts.push("## The user's own instructions\n" + entriesBlock(own));
+    return parts.length ? parts.join('\n\n') : null;
+  }
+
+  private activeEntries(): ContextEntry[] {
+    return this.contextEntries().filter((e) => e.enabled && e.text.trim());
+  }
+
+  /** Changes whenever the first-message context changes (an extension update, an edited entry). */
+  private fingerprint(): string {
+    const body = this.firstMessageBody() ?? '';
+    let h = 0;
+    for (let i = 0; i < body.length; i++) h = (Math.imul(31, h) + body.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(16);
+  }
+
+  /** chat id → fingerprint of the first-message context it got (oldest first). */
+  private sentMap(): Record<string, string> {
+    return this.store.get<Record<string, string>>('global.context.sent') ?? {};
+  }
+
+  private markSent(chatId: string, fp: string) {
+    const m = this.sentMap();
+    delete m[chatId];
+    m[chatId] = fp;
+    const keys = Object.keys(m);
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_REMEMBERED_CHATS))) delete m[k];
+    this.store.set('global.context.sent', m);
+  }
+
+  /**
+   * A normal chat message with the hidden context in front (GlobalContext.wrap): the first-message part on a new chat,
+   * and again when it changed since this chat got it; every-message entries always.
+   */
+  wrap(text: string, isNew: boolean, chatId?: string | null): string {
+    const first = this.firstMessageBody();
+    const fp = this.fingerprint();
+    const known = chatId ? this.sentMap()[chatId] : undefined;
+    const sendFirst = first != null && (isNew || known !== fp);
+    const everyOwn = this.activeEntries().filter((e) => e.everyMessage);
+    const every = everyOwn.length ? "[The user's standing instructions, sent with every message]\n" + entriesBlock(everyOwn) : null;
+    if (!sendFirst && !every) return text;
     let note = '';
-    if (first.length) {
-      note += "[AntiGem app context: from the app the user chats through, not written by the user. Follow it for this whole chat; it is not repeated.]\n\n";
-      note += first.map(fmt).join('\n\n');
+    if (sendFirst) {
+      note +=
+        isNew
+          ? '[AntiGem app context: from the app the user chats through, not written by the user. Follow it for this whole chat; it is not repeated.]'
+          : known
+            ? '[AntiGem app context, updated: it replaces the earlier copy in this chat. Follow it from now on.]'
+            : '[AntiGem app context: from the app the user chats through. Follow it from now on in this chat.]';
+      note += '\n\n' + first;
+      if (chatId) this.markSent(chatId, fp);
     }
-    if (every.length) note += (note ? '\n\n' : '') + every.map(fmt).join('\n\n');
+    if (every) note += (note ? '\n\n' : '') + every;
     // a message that starts with a /command must still start with it (the CLI only runs a leading /command)
     if (text.trimStart().startsWith('/')) return `${text}\n\n${hiddenBlock(note)}`;
     return hiddenBlock(note) + text;
@@ -157,7 +234,7 @@ export class HostSettings {
           label: 'Global context',
           icon: 'description',
           description: 'Instructions added to your chats',
-          badge: String(this.contextEntries().filter((e) => e.enabled).length),
+          badge: String(this.contextEntries().filter((e) => e.enabled).length + (this.builtInEnabled() ? 1 : 0)),
         },
       ],
     };
@@ -244,6 +321,21 @@ export class HostSettings {
         title: 'Global context',
         sections: [
           {
+            id: 'builtin',
+            title: 'Built-in',
+            description: 'Written by AntiGem: tells every agent how to show images, videos, diagrams, math and live web pages in this chat.',
+            items: [
+              {
+                kind: 'toggle',
+                id: 'builtin',
+                label: 'Send the built-in context',
+                description: 'Once at the start of each chat (again when it changes). Turn it off if your agents should not get it.',
+                value: this.builtInEnabled(),
+              },
+              { kind: 'text', id: 'builtin.text', label: 'What it says', value: this.builtInText(), multiline: true, rows: 12, disabled: true },
+            ],
+          },
+          {
             id: 'entries',
             title: 'Context',
             description: 'Hidden notes for the agent (the chat never shows them).',
@@ -278,6 +370,10 @@ export class HostSettings {
 
   /** Returns true when the change was a host setting. */
   change(page: string, id: string, value: unknown, rowId?: string): boolean {
+    if (page === 'context' && id === 'builtin') {
+      this.store.set('global.context.builtin', value === true);
+      return true;
+    }
     if (page === 'context' && id === 'entries' && rowId) {
       this.saveContext(this.contextEntries().map((e) => (e.id === rowId ? { ...e, enabled: value === true } : e)));
       return true;

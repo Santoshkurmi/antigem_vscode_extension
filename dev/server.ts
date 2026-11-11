@@ -23,6 +23,7 @@ import { CodexBackend } from '../src/core/codex/CodexBackend';
 import { ClaudeBackend } from '../src/core/claude/ClaudeBackend';
 import { OpenCodeBackend } from '../src/core/opencode/OpenCodeBackend';
 import type { KeyValueStore } from '../src/core/types';
+import { PreviewServer } from '../src/core/preview/server';
 
 const ROOT = path.resolve(__dirname, '..');
 const workspace = path.resolve(process.argv[2] ?? process.cwd());
@@ -159,6 +160,9 @@ const host = new AppHost(
   log,
   kv,
 );
+// Interactive Apps, local videos and YouTube embeds (the browser tab has no CSP: any port works)
+const preview = new PreviewServer(log);
+void preview.start().then(() => (host.preview = preview));
 // built-in MCP servers (same as the extension; the first process on the port serves them)
 let deviceId = kv.get<string>('mcp.deviceId');
 if (!deviceId) {

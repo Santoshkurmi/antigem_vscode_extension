@@ -7,6 +7,7 @@ import {
   LIGHT_DEFAULT,
   contrast,
   customFromJson,
+  baseTheme,
   defaultTheme,
   hex,
   parseHex,
@@ -41,7 +42,12 @@ function tools(): McpTool[] {
     S.tool('theme_get', 'All colors of one theme (as hex), plus its readability check.', [], idProp),
     S.tool('theme_tokens', 'Every color token a theme can set, what it is used for, and which ones are the seeds to give when creating a theme.', [], {}),
     S.tool('theme_apply', 'Use a theme (for its side: light or dark). If the app\'s mode would not show that side, the mode switches to it.', ['id'], idProp),
-    S.tool('theme_set_mode', 'Light, dark, or follow the system (Auto).', ['mode'], { mode: S.prop('string', 'The mode', ['system', 'light', 'dark']) }),
+    S.tool(
+      'theme_set_mode',
+      "vscode (the default: VS Code's own theme colors, live), system (Auto: VS Code's light / dark side with AntiGem themes), light or dark.",
+      ['mode'],
+      { mode: S.prop('string', 'The mode', ['vscode', 'system', 'light', 'dark']) },
+    ),
     S.tool(
       'theme_create',
       'Create a custom theme. Give the seed colors (see theme_tokens); the rest is worked out from them or taken from base. Returns the id and readability warnings.',
@@ -80,9 +86,10 @@ export function themeMcp(prefs: ThemePrefsAccess): McpServerDef {
     const k = idOrName.trim().toLowerCase();
     return all().find((t) => t.id.toLowerCase() === k) ?? all().find((t) => t.name.toLowerCase() === k);
   };
-  const mode = (): 'system' | 'light' | 'dark' => {
-    const t = String(prefs.get().theme ?? 'auto');
-    if (t === 'light' || t === 'dark') return t;
+  /** vscode: VS Code's own theme colors (the default); system: VS Code's light / dark side with AntiGem themes. */
+  const mode = (): 'vscode' | 'system' | 'light' | 'dark' => {
+    const t = String(prefs.get().theme ?? 'vscode');
+    if (t === 'light' || t === 'dark' || t === 'vscode') return t;
     if (t === 'auto') return 'system';
     return find(t)?.dark ? 'dark' : 'light';
   };
@@ -99,7 +106,7 @@ export function themeMcp(prefs: ThemePrefsAccess): McpServerDef {
   /** The side the views show (auto follows the editor; the views report it as screenSide). */
   const side = (): 'light' | 'dark' => {
     const m = mode();
-    if (m !== 'system') return m;
+    if (m === 'light' || m === 'dark') return m;
     return prefs.get().screenSide === 'light' ? 'light' : 'dark';
   };
   const current = () => find(side() === 'dark' ? darkId() : lightId()) ?? defaultTheme(side() === 'dark');
@@ -125,7 +132,11 @@ export function themeMcp(prefs: ThemePrefsAccess): McpServerDef {
     const m = mode();
     const patch: Record<string, unknown> = t.dark ? { darkTheme: t.id } : { lightTheme: t.id };
     let switched: string | null = null;
-    if (m !== 'system' && (m === 'dark') !== t.dark) {
+    // matching VS Code shows no AntiGem theme: keep following VS Code's side, with this theme's colors
+    if (m === 'vscode') {
+      patch.theme = 'auto';
+      switched = 'auto (follows VS Code light / dark)';
+    } else if (m !== 'system' && (m === 'dark') !== t.dark) {
       patch.theme = t.dark ? 'dark' : 'light';
       switched = t.dark ? 'dark' : 'light';
     } else if (m !== 'system') patch.theme = m;
@@ -183,7 +194,14 @@ export function themeMcp(prefs: ThemePrefsAccess): McpServerDef {
   });
 
   const handlers: Record<string, (a: Record<string, unknown>) => McpResult> = {
-    theme_list: () => jsonResult({ mode: mode(), light_side: lightId(), dark_side: darkId(), on_screen: current().id, themes: all().map(themeJson) }),
+    theme_list: () =>
+      jsonResult({
+        mode: mode(),
+        light_side: lightId(),
+        dark_side: darkId(),
+        on_screen: mode() === 'vscode' ? 'vscode (the colors of the user\'s VS Code theme)' : current().id,
+        themes: all().map(themeJson),
+      }),
     theme_get(a) {
       const t = target(a);
       if (!t) return errorResult(`No theme "${String(a.id ?? '')}". Use theme_list.`);
@@ -205,8 +223,8 @@ export function themeMcp(prefs: ThemePrefsAccess): McpServerDef {
     },
     theme_set_mode(a) {
       const m = String(a.mode ?? '').toLowerCase();
-      const v = m === 'light' ? 'light' : m === 'dark' ? 'dark' : m === 'system' || m === 'auto' ? 'auto' : null;
-      if (!v) return errorResult('Use system, light or dark.');
+      const v = m === 'light' ? 'light' : m === 'dark' ? 'dark' : m === 'system' || m === 'auto' ? 'auto' : m === 'vscode' || m === 'vs code' ? 'vscode' : null;
+      if (!v) return errorResult('Use vscode, system, light or dark.');
       prefs.set({ theme: v });
       return text(`Theme mode is now ${v === 'auto' ? 'system' : v}.`);
     },
@@ -217,7 +235,7 @@ export function themeMcp(prefs: ThemePrefsAccess): McpServerDef {
       const dark = a.dark === true || a.dark === 'true';
       const problems: string[] = [];
       const colors = colorsOf(a, problems);
-      let base = defaultTheme(dark);
+      let base = baseTheme(dark);
       if (String(a.base ?? '').trim()) {
         const b = find(String(a.base));
         if (!b) return errorResult(`No base theme "${String(a.base)}".`);

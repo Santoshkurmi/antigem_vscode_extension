@@ -63,10 +63,17 @@ const S = {
   PENDING: 'CORTEX_STEP_STATUS_PENDING',
   GENERATING: 'CORTEX_STEP_STATUS_GENERATING',
   QUEUED: 'CORTEX_STEP_STATUS_QUEUED',
+  /** Done, its output since dropped from the model's context (e.g. a finished `schedule` timer). */
+  CLEARED: 'CORTEX_STEP_STATUS_CLEARED',
   UNSPECIFIED: 'CORTEX_STEP_STATUS_UNSPECIFIED',
 };
 const T = (s: string) => `CORTEX_STEP_TYPE_${s}`;
 
+/** manage_task → Manage task (a tool agy did not title itself). */
+const prettyToolName = (n: string) => {
+  const t = n.replace(/^mcp_/, '').replace(/[_-]+/g, ' ').trim();
+  return t ? t[0].toUpperCase() + t.slice(1) : 'Tool';
+};
 const nonBlank = (s: unknown): string | null => (typeof s === 'string' && s.trim() !== '' ? s : null);
 const tsMillis = (ts: any): number | null => (ts ? Number(ts.seconds ?? 0) * 1000 + Math.floor(Number(ts.nanos ?? 0) / 1e6) : null);
 const durMillis = tsMillis;
@@ -879,7 +886,44 @@ export class TrajectoryEngine {
       [T('GENERATE_IMAGE')]: 'generate_image',
       [T('MCP_TOOL')]: 'call_mcp_tool',
       [T('ASK_QUESTION')]: 'ask_question',
+      [T('INVOKE_SUBAGENT')]: 'invoke_subagent',
+      [T('BROWSER_SUBAGENT')]: 'browser_subagent',
     };
+    // how agy itself titles a generic tool (manage_task, schedule, send_message…): "Checked" + "Task: Compile…", an icon
+    const render = step.generic?.result?.step_render_info;
+    const renderTitle =
+      nonBlank(render?.title) ??
+      nonBlank(
+        (render?.title_parts ?? [])
+          .map((p: any) => p?.text ?? '')
+          .join('')
+          .trim(),
+      );
+    // bookkeeping steps (checkpoints, conversation history, knowledge items…) have no tool, no title and nothing to show
+    if (
+      !nonBlank(meta?.tool_call?.name) &&
+      !typeName[step.type] &&
+      !renderTitle &&
+      !nonBlank(meta?.tool_summary) &&
+      !nonBlank(meta?.tool_action) &&
+      !(
+        step.run_command ||
+        step.view_file ||
+        step.code_action ||
+        step.write_to_file ||
+        step.list_directory ||
+        step.grep_search ||
+        step.find ||
+        step.search_web ||
+        step.read_url_content ||
+        step.generate_image ||
+        step.mcp_tool ||
+        step.invoke_subagent ||
+        step.ask_question ||
+        step.requested_interaction
+      )
+    )
+      return null;
     const rawName: string =
       nonBlank(meta?.tool_call?.name) ??
       typeName[step.type] ??
@@ -907,7 +951,9 @@ export class TrajectoryEngine {
                             ? 'call_mcp_tool'
                             : step.ask_question || step.requested_interaction?.ask_question
                               ? 'ask_question'
-                              : (nonBlank(meta?.tool_summary) ?? 'unknown_tool'));
+                              : step.invoke_subagent
+                                ? 'invoke_subagent'
+                                : (nonBlank(meta?.tool_summary) ?? 'tool'));
 
     const toolType: ToolType = (() => {
       switch (rawName) {
@@ -978,6 +1024,9 @@ export class TrajectoryEngine {
     let output = '';
     let exitCode: number | null = null;
     let questionnaire: ChoiceQuestionnaire | null = null;
+    let subagentConversationId: string | null = null;
+    let label: string | null = null;
+    let icon: string | null = null;
 
     switch (rawName) {
       case 'run_command':
@@ -1135,9 +1184,46 @@ export class TrajectoryEngine {
         }
         break;
       }
-      default:
-        command = nonBlank(meta?.tool_action) ?? summary ?? rawName;
-        output = fullOutputUri ? `[Output at ${fullOutputUri}]` : '';
+      case 'invoke_subagent': {
+        const subs: any[] = step.invoke_subagent?.subagents ?? [];
+        const results: any[] = step.invoke_subagent?.results ?? [];
+        command =
+          subs
+            .map((a) => {
+              const role = nonBlank(a?.role);
+              const type = nonBlank(a?.type_name);
+              return role && type ? `${role} (${type})` : (role ?? type ?? '');
+            })
+            .filter(Boolean)
+            .join(', ') ||
+          nonBlank(meta?.tool_action) ||
+          summary ||
+          'Subagent';
+        output = subs.map((a) => nonBlank(a?.initial_prompt)).filter(Boolean).join('\n\n---\n\n');
+        subagentConversationId = nonBlank(results[0]?.conversation_id);
+        break;
+      }
+      case 'browser_subagent':
+        command = nonBlank(args.TaskName) ?? summary ?? nonBlank(meta?.tool_action) ?? 'Browser';
+        output = nonBlank(args.Task) ?? '';
+        label = 'Browser agent';
+        icon = 'language';
+        break;
+      default: {
+        command = renderTitle ?? nonBlank(meta?.tool_action) ?? summary ?? prettyToolName(rawName);
+        label = nonBlank(render?.title_prefix) ?? (renderTitle ? null : prettyToolName(rawName));
+        icon = nonBlank(render?.icon);
+        const blocks: string[] = (render?.content_blocks ?? []).map((b: any) => nonBlank(b?.markdown) ?? nonBlank(b?.text) ?? '').filter(Boolean);
+        const resultMeta = step.generic?.result?.metadata;
+        output =
+          blocks.join('\n\n') ||
+          (resultMeta && typeof resultMeta === 'object' && Object.keys(resultMeta).length
+            ? Object.entries(resultMeta)
+                .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+                .join('\n')
+            : '') ||
+          (fullOutputUri ? `[Output at ${fullOutputUri}]` : '');
+      }
     }
     if (!command.trim()) command = nonBlank(meta?.tool_action) ?? summary ?? rawName;
 
@@ -1145,6 +1231,7 @@ export class TrajectoryEngine {
     let status: string;
     switch (step.status) {
       case S.DONE:
+      case S.CLEARED:
         this.userRespondedStepIndices.delete(stepIndex);
         status = 'SUCCESS';
         break;
@@ -1199,6 +1286,9 @@ export class TrajectoryEngine {
       trajectoryId: this.trajectoryId,
       interactionType: interactionTypeOf(step),
       questionnaire,
+      ...(subagentConversationId ? { subagentConversationId } : {}),
+      ...(label ? { label } : {}),
+      ...(icon ? { icon } : {}),
     };
   }
 

@@ -299,15 +299,18 @@ export class ClaudeSession {
    */
   private watchDisk() {
     if (this.diskTimer || this.closed || !this.listeners.size) return;
-    const busy = Date.now() - this.lastDiskChange < 5 * 60_000 || this.b.hasRunningSubagents(this.id);
-    this.diskTimer = setTimeout(() => void this.checkDisk(), busy && !this.processLive ? 3_000 : 15_000);
+    const busy = Date.now() - this.lastDiskChange < 5 * 60_000;
+    // a working subagent is polled fast even while our own process streams the chat (its rows and state live on disk)
+    const fast = this.b.hasRunningSubagents(this.id) || (busy && !this.processLive);
+    this.diskTimer = setTimeout(() => void this.checkDisk(), fast ? 3_000 : 15_000);
   }
 
   private async checkDisk() {
     this.diskTimer = null;
     if (this.closed || !this.listeners.size) return;
     try {
-      if (this.historyLoaded && this.b.isOnDisk(this.id)) {
+      // a chat started here never loads a history, but its subagents still need polling once it is on disk
+      if ((this.historyLoaded || this.started) && this.b.isOnDisk(this.id)) {
         const r = await this.b.bridgeJson(`/api/claude/sessions/${this.id}/subagents`, {}, 15_000);
         if (r?.success && !this.closed) {
           this.b.applySessionSubagents(this.id, Array.isArray(r.subagents) ? r.subagents : []);
@@ -474,6 +477,9 @@ export class ClaudeSession {
           this.retryNoticeShown = false;
           this.workingLabel = null;
         }
+        // a subagent was started: its drawer row shows within seconds, not on the next list refresh
+        if (type === 'assistant' && Array.isArray(data.message?.content) && data.message.content.some((c: any) => c?.type === 'tool_use' && (c.name === 'Agent' || c.name === 'Task')))
+          this.b.pollSubagentsSoon(this.id);
         if (type === 'result') {
           if (this.queuedRestart) {
             const m = this.queuedRestart;

@@ -1268,6 +1268,8 @@ export class CodexBackend implements AgentBackend {
     s.emitNow();
 
     if (isNew) {
+      // a caller's own effort (a Jarvis task), when the model has that level
+      if (req.effort && req.effort !== 'default' && this.effortsOf(modelId).includes(req.effort)) s.effort = req.effort;
       const firstLine = displayUserText(typed || 'Attachment', 'title').text.split('\n').find((l) => l.trim()) ?? 'Chat';
       const now = Date.now();
       s.localConversation = {

@@ -171,6 +171,8 @@ export interface JarvisHostApi {
   expand(text: string): string;
   /** Settings → Global context entries (those with forJarvis are told to Jarvis). */
   contextEntries(): { title: string; text: string; enabled: boolean; everyMessage: boolean; forJarvis?: boolean }[];
+  /** Settings → Global context's built-in text ([h] = heading level), or null when the user turned it off. */
+  builtInContext(h?: string): string | null;
   uiPrefs(): Record<string, unknown>;
   patchUiPrefs(patch: Record<string, unknown>): void;
   editorContext(): EditorContextView | null;

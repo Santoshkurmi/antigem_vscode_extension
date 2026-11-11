@@ -510,6 +510,9 @@ function ItemView(props: { item: SettingItem; pageId: string; section: SettingsS
         <Match when={it().kind === 'page'}>
           <RowGroup rows={[pageRow(as('page'), props.section)]} />
         </Match>
+        <Match when={it().kind === 'modelGroups'}>
+          <ModelGroupsItem item={as('modelGroups')} pageId={props.pageId} />
+        </Match>
         <Match when={it().kind === 'quota'}>
           <QuotaItem label={as('quota').label === props.section.title ? '' : as('quota').label} groups={as('quota').groups} />
         </Match>
@@ -921,6 +924,287 @@ function ButtonItem(props: { item: Extract<SettingItem, { kind: 'button' }>; pag
 }
 
 function ListItem(props: { item: Extract<SettingItem, { kind: 'list' }>; pageId: string }) {
+  return (
+    <Switch fallback={<RowsList item={props.item} pageId={props.pageId} />}>
+      <Match when={props.item.display === 'tiles'}>
+        <TilesList item={props.item} pageId={props.pageId} />
+      </Match>
+      <Match when={props.item.display === 'search'}>
+        <SearchList item={props.item} pageId={props.pageId} />
+      </Match>
+    </Switch>
+  );
+}
+
+/**
+ * Runs a row's action for the tile / search lists: its only action at once, or a chooser first when it has several
+ * ("How do you want to sign in?"), then the action's form and confirmation like a row's menu.
+ */
+function RowActionHost(props: { row: SettingListRow | null; itemId: string; pageId: string; onDone: () => void }) {
+  const [choose, setChoose] = createSignal<SettingListRow | null>(null);
+  const [confirm, setConfirm] = createSignal<RowAction | null>(null);
+  const [formFor, setFormFor] = createSignal<RowAction | null>(null);
+  const [row, setRow] = createSignal<SettingListRow | null>(null);
+  let pending: Record<string, string> | undefined;
+  const send = (a: RowAction, values?: Record<string, string>) => {
+    const r = row();
+    if (r) settingAction(props.pageId, props.itemId, { rowId: r.id, actionId: a.id, values });
+  };
+  const run = (a: RowAction) => {
+    setChoose(null);
+    pending = undefined;
+    if (a.form?.length) setFormFor(a);
+    else if (a.confirm) setConfirm(a);
+    else send(a);
+  };
+  createEffect(
+    on(
+      () => props.row,
+      (r) => {
+        if (!r) return;
+        setRow(r);
+        props.onDone();
+        const acts = r.actions ?? [];
+        if (acts.length === 1) run(acts[0]);
+        else if (acts.length > 1) setChoose(r);
+      },
+    ),
+  );
+  return (
+    <>
+      <Dialog open={!!choose()} onClose={() => setChoose(null)} title={choose()?.title ?? ''} width={420}>
+        <div class="choose-hint hint">{choose()?.subtitle}</div>
+        <div class="choose-list">
+          <For each={choose()?.actions ?? []}>
+            {(a) => (
+              <button class="choose-row" classList={{ danger: !!a.danger }} onClick={() => run(a)}>
+                <span>{a.label}</span>
+                <Icon name="chevron_right" size={16} />
+              </button>
+            )}
+          </For>
+        </div>
+      </Dialog>
+      <ConfirmDialog
+        open={!!confirm()}
+        title={confirm()?.label ?? ''}
+        text={confirm()?.confirm ?? ''}
+        danger={!!confirm()?.danger}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => {
+          const a = confirm();
+          if (a) send(a, pending);
+        }}
+      />
+      <FormDialog
+        open={!!formFor()}
+        title={`${formFor()?.label ?? ''} · ${row()?.title ?? ''}`}
+        fields={formFor()?.form ?? []}
+        confirmLabel={formFor()?.label === 'Edit' ? 'Save' : 'Continue'}
+        onClose={() => setFormFor(null)}
+        onSubmit={(values) => {
+          const a = formFor();
+          if (!a) return;
+          if (a.confirm) {
+            pending = values;
+            setConfirm(a);
+          } else send(a, values);
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * The app's ModelsCard (OpenCodeProvidersPage.kt): a row per provider (chevron, name, "3 of 12 models on", switch);
+ * opened: All on / All off, a search when it has more than 12 models, and a switch per model.
+ */
+function ModelGroupsItem(props: { item: Extract<SettingItem, { kind: 'modelGroups' }>; pageId: string }) {
+  const [open, setOpen] = createSignal<Set<string>>(new Set());
+  const [queries, setQueries] = createStore<Record<string, string>>({});
+  const toggleOpen = (id: string) =>
+    setOpen((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  return (
+    <div class="mg" style={{ '--accent': accentOf(props.item.accent) }}>
+      <Show when={props.item.label || props.item.description}>
+        <Label label={props.item.label} description={props.item.description} />
+      </Show>
+      <Show when={props.item.groups.length} fallback={<div class="list-empty">{props.item.emptyText ?? 'No models yet'}</div>}>
+        <For each={props.item.groups}>
+          {(g) => {
+            const isOpen = () => open().has(g.id);
+            const onCount = () => g.models.filter((m) => m.on).length;
+            const shown = () => {
+              const q = (queries[g.id] ?? '').trim().toLowerCase();
+              return q ? g.models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : g.models;
+            };
+            return (
+              <div class="mg-group">
+                <div class="mg-head" onClick={() => toggleOpen(g.id)}>
+                  <Icon name={isOpen() ? 'expand_more' : 'chevron_right'} size={18} class="mg-chev" />
+                  <div class="mg-titles">
+                    <div class="mg-name">{g.name}</div>
+                    <div class="hint">{g.on ? `${onCount()} of ${g.models.length} models on` : `Off · ${g.models.length} models`}</div>
+                  </div>
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <MSwitch checked={g.on} label={g.name} onChange={(v) => changeSetting(props.pageId, props.item.id, v, `provider:${g.id}`)} />
+                  </span>
+                </div>
+                <Show when={isOpen()}>
+                  <div class="mg-body">
+                    <div class="mg-bulk">
+                      <button class="text-btn small" disabled={!g.on} onClick={() => settingAction(props.pageId, props.item.id, { rowId: g.id, actionId: 'allOn' })}>
+                        All on
+                      </button>
+                      <button class="text-btn small" disabled={!g.on} onClick={() => settingAction(props.pageId, props.item.id, { rowId: g.id, actionId: 'allOff' })}>
+                        All off
+                      </button>
+                    </div>
+                    <Show when={g.models.length > 12}>
+                      <div class="sheet-search mg-search">
+                        <Icon name="search" size={18} />
+                        <input placeholder={`Search ${g.models.length} models`} value={queries[g.id] ?? ''} onInput={(e) => setQueries(g.id, e.currentTarget.value)} />
+                      </div>
+                    </Show>
+                    <For each={shown()} fallback={<div class="list-empty">No match</div>}>
+                      {(m) => (
+                        <div class="mg-model" classList={{ off: !g.on }}>
+                          <div class="mg-titles">
+                            <div class="mg-model-name">{m.name}</div>
+                            <Show when={m.detail}>
+                              <div class="hint mg-detail">{m.detail}</div>
+                            </Show>
+                          </div>
+                          <MSwitch checked={m.on} disabled={!g.on} label={m.name} onChange={(v) => changeSetting(props.pageId, props.item.id, v, `model:${m.id}`)} />
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            );
+          }}
+        </For>
+      </Show>
+    </div>
+  );
+}
+
+/** Rows as the app's McpPresetTile cards, two a row (OpenCode's quick providers). */
+function TilesList(props: { item: Extract<SettingItem, { kind: 'list' }>; pageId: string }) {
+  const [picked, setPicked] = createSignal<SettingListRow | null>(null);
+  const icon = (): IconName => (props.item.icon && hasIcon(props.item.icon) ? props.item.icon : 'login');
+  return (
+    <>
+      <Show when={props.item.label || props.item.description}>
+        <Label label={props.item.label} description={props.item.description} />
+      </Show>
+      <Show when={props.item.rows.length} fallback={<div class="list-empty">{props.item.emptyText ?? 'Nothing here yet'}</div>}>
+        <div class="preset-grid">
+          <For each={props.item.rows}>
+            {(r) => {
+              const added = () => r.status === 'Connected';
+              const busy = () => (r.actions ?? []).some((a) => isBusy(props.pageId, props.item.id, r.id, a.id));
+              return (
+                <button class="preset-tile" classList={{ added: added(), busy: busy() }} style={{ '--accent': accentOf(props.item.accent) }} disabled={busy()} onClick={() => setPicked(r)}>
+                  <span class="preset-icon">
+                    <Show when={busy()} fallback={<Icon name={icon()} size={19} />}>
+                      <span class="mini-spinner" />
+                    </Show>
+                  </span>
+                  <span class="preset-text">
+                    <span class="preset-name-row">
+                      <span class="preset-name">{r.title}</span>
+                      <Show when={added()}>
+                        <Icon name="check_circle" size={13} class="preset-check" />
+                      </Show>
+                    </span>
+                    <span class="preset-sub">{added() ? 'Connected · tap to add another' : r.subtitle}</span>
+                  </span>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+      <RowActionHost row={picked()} itemId={props.item.id} pageId={props.pageId} onDone={() => setPicked(null)} />
+    </>
+  );
+}
+
+/** One button that opens a searchable sheet of the rows (the app's AllProvidersSheet). */
+function SearchList(props: { item: Extract<SettingItem, { kind: 'list' }>; pageId: string }) {
+  const [open, setOpen] = createSignal(false);
+  const [query, setQuery] = createSignal('');
+  const [picked, setPicked] = createSignal<SettingListRow | null>(null);
+  let input: HTMLInputElement | undefined;
+  const shown = createMemo(() => {
+    const q = query().trim().toLowerCase();
+    return q ? props.item.rows.filter((r) => r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)) : props.item.rows;
+  });
+  const accent = () => accentOf(props.item.accent);
+  createEffect(
+    on(open, (o) => {
+      if (o) nextFrame(() => input?.focus());
+      else setQuery('');
+    }),
+  );
+  return (
+    <>
+      <Show when={props.item.description}>
+        <div class="hint">{props.item.description}</div>
+      </Show>
+      <button class="search-list-btn" style={{ background: accent() }} disabled={!props.item.rows.length} onClick={() => setOpen(true)}>
+        <Icon name="search" size={16} />
+        {props.item.label}
+      </button>
+      <BottomSheet open={open()} onClose={() => setOpen(false)} class="search-list-sheet">
+        <div class="sheet-header">
+          <div class="sheet-titles">
+            <div class="sheet-title">{props.item.searchTitle ?? props.item.label}</div>
+          </div>
+        </div>
+        <div class="sheet-search">
+          <Icon name="search" size={18} />
+          <input ref={input} placeholder={`Search ${props.item.rows.length}`} value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
+        </div>
+        <div class="search-list-rows">
+          <For each={shown()} fallback={<div class="list-empty">No match for “{query()}”</div>}>
+            {(r) => (
+              <button
+                class="search-list-row"
+                onClick={() => {
+                  setOpen(false);
+                  setPicked(r);
+                }}
+              >
+                <span class="search-list-text">
+                  <span class="search-list-title">{r.title}</span>
+                  <Show when={r.subtitle}>
+                    <span class="hint">{r.subtitle}</span>
+                  </Show>
+                </span>
+                <Show when={r.status}>
+                  <span class="search-list-status" style={{ color: accent() }}>
+                    {r.status!.toLowerCase()}
+                  </span>
+                </Show>
+              </button>
+            )}
+          </For>
+        </div>
+      </BottomSheet>
+      <RowActionHost row={picked()} itemId={props.item.id} pageId={props.pageId} onDone={() => setPicked(null)} />
+    </>
+  );
+}
+
+function RowsList(props: { item: Extract<SettingItem, { kind: 'list' }>; pageId: string }) {
   const [adding, setAdding] = createSignal(false);
   return (
     <div class="list-item">

@@ -33,6 +33,10 @@ export interface SendRequest {
   modelId: string | null;
   /** file:// URI of the project folder (new chats). */
   workspaceUri: string | null;
+  /** A new chat's reasoning effort (Claude: low…max, Codex: the model's levels; 'default' = the agent's default). */
+  effort?: string | null;
+  /** A new Claude chat's extended thinking. */
+  thinking?: boolean | null;
 }
 
 /** An agent's settings: its section on the root page and its own pages (ids prefixed with the agent, "agy.mcp"). */

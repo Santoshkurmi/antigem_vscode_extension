@@ -8,6 +8,29 @@ import { Collapse, Dialog, Icon, IconButton, type IconName } from '../ui/primiti
 import { alpha, formatDuration } from '../util/format';
 import { copyText, openConversation, readImage, send, sendMessage, state, stop } from '../state/store';
 import { DiffView, looksLikeDiff } from './CodeBlock';
+import { hasIcon } from '../ui/iconData';
+
+// the agent's own icon names (agy's step_render_info) → the icons this UI has
+const AGENT_ICON: Record<string, IconName> = {
+  task_alt: 'check_circle_o',
+  task: 'checklist',
+  send: 'forum',
+  mail: 'forum',
+  message: 'forum',
+  chat: 'chat',
+  alarm: 'schedule',
+  hourglass_empty: 'hourglass',
+  travel_explore: 'language',
+  web: 'language',
+  article: 'description',
+  note: 'edit_note',
+  smart_toy: 'smart_toy',
+};
+const agentIcon = (name: string | null | undefined): IconName | null => {
+  if (!name) return null;
+  const n = name.trim().toLowerCase();
+  return AGENT_ICON[n] ?? (hasIcon(n) ? n : null);
+};
 import { openImageViewer } from './Media';
 import { createResource } from 'solid-js';
 
@@ -114,6 +137,7 @@ function ToolRow(props: { call: ToolCall }) {
     if (running()) {
       if (isSystem()) return 'System event...';
       if (isSubagent()) return 'Subagent working...';
+      if (ty === 'UNKNOWN') return t().label ? `${t().label}...` : 'Working...';
       switch (ty) {
         case 'SEARCH_WEB':
           return 'Searching web...';
@@ -141,6 +165,8 @@ function ToolRow(props: { call: ToolCall }) {
     if (success()) {
       if (isSystem()) return 'System:';
       if (isSubagent()) return 'Subagent';
+      // a tool with no type of its own: the agent's verb ("Checked", "Messaged"), never "Ran bash"
+      if (ty === 'UNKNOWN') return t().label || 'Done';
       switch (ty) {
         case 'SEARCH_WEB':
           return 'Web search';
@@ -187,6 +213,8 @@ function ToolRow(props: { call: ToolCall }) {
   const toolIcon = (): IconName => {
     if (isSystem()) return /timer|schedule/i.test(t().command) ? 'schedule' : 'notifications';
     if (isSubagent()) return 'smart_toy';
+    const own = agentIcon(t().icon);
+    if (own) return own;
     switch (type()) {
       case 'SEARCH_WEB':
         return 'search';
@@ -206,6 +234,8 @@ function ToolRow(props: { call: ToolCall }) {
       case 'GENERATE_IMAGE':
         return 'image';
       case 'MCP':
+        return 'build';
+      case 'UNKNOWN':
         return 'build';
       default:
         return 'terminal';

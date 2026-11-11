@@ -25,7 +25,10 @@ export interface CustomThemeJson {
 }
 
 export const LIGHT_DEFAULT = 'antigem_light';
-export const DARK_DEFAULT = 'midnight_aurora';
+/** The dark theme a new install uses (Auto / Dark mode): VS Code's own default dark. */
+export const DARK_DEFAULT = 'vs_dark_modern';
+/** The dark theme custom themes build on and take missing colors from (unchanged, so they keep their look). */
+export const DARK_BASE = 'midnight_aurora';
 
 // ------------------------------------------------------------------------------------------------ color math
 
@@ -271,7 +274,7 @@ function midnightAurora(): AppTheme {
     editor_removed_bg: 0xff39232f, editor_removed_text: 0xffefaabd, editor_info_bg: 0xff1a253b, editor_info_text: 0xff86b6fa,
     terminal_bg: 0xff0c0e19, terminal_fg: 0xffd6dbf5, terminal_cursor: 0xffa78bfa,
   };
-  return { id: DARK_DEFAULT, name: 'Midnight Aurora', dark: true, builtIn: true, about: 'Deep ink-blue midnight with luminous violet, aurora teal and rose accents', colors: c };
+  return { id: DARK_BASE, name: 'Midnight Aurora', dark: true, builtIn: true, about: 'Deep ink-blue midnight with luminous violet, aurora teal and rose accents', colors: c };
 }
 
 /** A full theme from a few colors; everything else is worked out (BuiltInThemes.seeded). */
@@ -313,11 +316,30 @@ export const BUILT_IN: AppTheme[] = [
   seeded('solarized_light', 'Solarized Light', 'The classic low-glare cream palette', false,
     [0xfffdf6e3, 0xfffdf6e3, 0xfffffbef, 0xffeee8d5, 0xff073642, 0xff586e75, 0xff268bd2, 0xff2aa198, 0xff6c71c4, 0xff859900, 0xffb58900, 0xffdc322f, 0xff268bd2, 0xff002b36],
     [0xff859900, 0xffb58900, 0xff2aa198, 0xffd33682, 0xff657b83, 0xff268bd2, 0xffcb4b16, 0xff93a1a1]),
-  // dark: the same
-  midnightAurora(),
+  // dark: the same (Dark Modern, VS Code's default dark, is the default). Then Obsidian, the looks of VS Code's other
+  // dark themes (most people want the chat to match their editor), other popular editor themes, then AntiGem's own.
+  seeded('vs_dark_modern', 'Dark Modern', "VS Code's default dark: near-black side bar with a bright blue accent", true,
+    [0xff181818, 0xff181818, 0xff1f1f1f, 0xff2b2b2b, 0xffcccccc, 0xff9d9d9d, 0xff4daafc, 0xff0078d4, 0xffc586c0, 0xff2ea043, 0xffcca700, 0xfff85149, 0xff4daafc, 0xff1f1f1f],
+    [0xffc586c0, 0xff4ec9b0, 0xffce9178, 0xffb5cea8, 0xff6a9955, 0xffdcdcaa, 0xff9cdcfe, 0xffcccccc]),
   seeded('obsidian', 'Obsidian', 'Refined deep black with layered surfaces and a soft periwinkle glow', true,
     [0xff0d0e12, 0xff0d0e12, 0xff16181d, 0xff1f2229, 0xffecedf0, 0xff9297a3, 0xff8b9cff, 0xff6e7ff3, 0xffc4a1ff, 0xff4ade80, 0xfff5b454, 0xfff87171, 0xff60a5fa, 0xff111318],
     [0xffc4a1ff, 0xff7dd3fc, 0xff9fe2b0, 0xfff9b98a, 0xff5e6573, 0xff8bb4ff, 0xfff5d08a, 0xffb8bdc8]),
+  seeded('vs_dark', 'Visual Studio Dark', "VS Code's Dark (Visual Studio): grey side bar, classic blue accents", true,
+    [0xff252526, 0xff252526, 0xff2d2d2d, 0xff3c3c3c, 0xffcccccc, 0xff9d9d9d, 0xff3794ff, 0xff007acc, 0xffc586c0, 0xff89d185, 0xffcca700, 0xfff48771, 0xff75beff, 0xff1e1e1e],
+    [0xff569cd6, 0xff4ec9b0, 0xffce9178, 0xffb5cea8, 0xff6a9955, 0xffd4d4d4, 0xffdcdcaa, 0xffd4d4d4]),
+  seeded('vs_dark_plus', 'Dark+', "VS Code's Dark+: grey side bar with Dark+ code colors", true,
+    [0xff252526, 0xff252526, 0xff2d2d2d, 0xff37373d, 0xffcccccc, 0xff9d9d9d, 0xff3794ff, 0xff0e639c, 0xffc586c0, 0xff89d185, 0xffcca700, 0xfff48771, 0xff75beff, 0xff1e1e1e],
+    [0xffc586c0, 0xff4ec9b0, 0xffce9178, 0xffb5cea8, 0xff6a9955, 0xffdcdcaa, 0xff9cdcfe, 0xffd4d4d4]),
+  seeded('one_dark_pro', 'One Dark Pro', "Atom's One Dark: soft blue-grey with pastel accents", true,
+    [0xff21252b, 0xff21252b, 0xff282c34, 0xff3e4451, 0xffabb2bf, 0xff7f848e, 0xff61afef, 0xffc678dd, 0xffe5c07b, 0xff98c379, 0xffe5c07b, 0xffe06c75, 0xff56b6c2, 0xff282c34],
+    ONE_DARK),
+  seeded('github_dark', 'GitHub Dark', "GitHub's dark default: deep blue-black with GitHub's blue", true,
+    [0xff010409, 0xff010409, 0xff0d1117, 0xff161b22, 0xffe6edf3, 0xff8d96a0, 0xff4493f8, 0xffa371f7, 0xfff778ba, 0xff3fb950, 0xffd29922, 0xfff85149, 0xff58a6ff, 0xff0d1117],
+    [0xffff7b72, 0xffffa657, 0xffa5d6ff, 0xff79c0ff, 0xff8b949e, 0xffd2a8ff, 0xffffa657, 0xffe6edf3]),
+  seeded('monokai', 'Monokai', 'The classic olive-black with neon pink, green and yellow', true,
+    [0xff1e1f1c, 0xff1e1f1c, 0xff272822, 0xff3e3d32, 0xfff8f8f2, 0xffa59f85, 0xff66d9ef, 0xfff92672, 0xffae81ff, 0xffa6e22e, 0xffe6db74, 0xfff92672, 0xff66d9ef, 0xff272822],
+    [0xfff92672, 0xff66d9ef, 0xffe6db74, 0xffae81ff, 0xff88846f, 0xffa6e22e, 0xfffd971f, 0xfff8f8f2]),
+  midnightAurora(),
   seeded('graphite', 'Graphite', "Warm charcoal with a glowing amber accent: AntiGem's look, refined", true,
     [0xff121212, 0xff121212, 0xff1b1b1c, 0xff262628, 0xffedebe8, 0xffa29e98, 0xfff0a04b, 0xffd9822b, 0xffb794f4, 0xff5bd18a, 0xfff4c152, 0xffef6b6b, 0xff6cb4f2, 0xff161616],
     [0xffc678dd, 0xffe5c07b, 0xff98c379, 0xffd19a66, 0xff6b717d, 0xff61afef, 0xffe5c07b, 0xffabb2bf]),
@@ -363,7 +385,89 @@ export const BUILT_IN: AppTheme[] = [
     [0xff859900, 0xffb58900, 0xff2aa198, 0xffd33682, 0xff6c8288, 0xff268bd2, 0xffcb4b16, 0xff93a1a1]),
 ];
 
+// ------------------------------------------------------------------------------------------------ the VS Code theme
+
+/** The "VS Code" mode's theme id (not in BUILT_IN: it is made from the editor's colors, live). */
+export const VSCODE_THEME_ID = 'vscode';
+
+/** A CSS color as VS Code writes its --vscode-* variables (#rgb, #rgba, #rrggbb, #rrggbbaa, rgb[a]()), or null. */
+function cssColor(text: string): number | null {
+  const t = text.trim();
+  let m = /^#([0-9a-f]{3,8})$/i.exec(t);
+  if (m) {
+    let h = m[1];
+    if (h.length === 3 || h.length === 4) h = [...h].map((c) => c + c).join('');
+    if (h.length === 6) return (0xff000000 | parseInt(h, 16)) >>> 0;
+    if (h.length === 8) return ((parseInt(h.slice(6), 16) << 24) | parseInt(h.slice(0, 6), 16)) >>> 0;
+    return null;
+  }
+  m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/i.exec(t);
+  if (m) {
+    const a = m[4] == null ? 1 : m[4].endsWith('%') ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+    const ch = (v: string) => Math.max(0, Math.min(255, Math.round(Number(v))));
+    return ((Math.round(Math.max(0, Math.min(1, a)) * 255) << 24) | (ch(m[1]) << 16) | (ch(m[2]) << 8) | ch(m[3])) >>> 0;
+  }
+  return null;
+}
+
+/** [c] laid over the opaque [under] (VS Code colors may be see-through). */
+function over(c: number, under: number): number {
+  const a = ((c >>> 24) & 0xff) / 255;
+  if (a >= 1) return c;
+  const mix = (sh: number) => Math.round(((c >>> sh) & 0xff) * a + ((under >>> sh) & 0xff) * (1 - a));
+  return (0xff000000 | (mix(16) << 16) | (mix(8) << 8) | mix(0)) >>> 0;
+}
+
+/**
+ * The editor's look as a theme: VS Code's own theme colors (the --vscode-* variables it gives every webview, updated
+ * live when the user switches themes) as the seeds, everything else worked out like a built-in theme. [read] returns a
+ * variable's value ('' when unset); [surface] = where the chat is (side bar or an editor tab). Null when the variables
+ * are missing (not inside VS Code).
+ */
+export function vscodeTheme(dark: boolean, read: (name: string) => string, surface: 'sidebar' | 'editor'): AppTheme | null {
+  const get = (...names: string[]): number | null => {
+    for (const n of names) {
+      const c = cssColor(read(`--vscode-${n}`));
+      if (c != null) return c;
+    }
+    return null;
+  };
+  const editorBg = get('editor-background');
+  const fg = get('foreground', 'editor-foreground');
+  if (editorBg == null || fg == null) return null;
+  const bg = over(surface === 'sidebar' ? (get('sideBar-background', 'panel-background') ?? editorBg) : editorBg, dark ? 0xff000000 : 0xffffffff);
+  const o = (c: number | null, fallback: number) => over(c ?? fallback, bg);
+  const text = o(fg, dark ? 0xffcccccc : 0xff3b3b3b);
+  const accent = o(get('textLink-foreground', 'button-background', 'focusBorder'), dark ? 0xff3794ff : 0xff005fb8);
+  const seeds: Record<string, number> = {
+    background: bg,
+    surface: bg,
+    card: o(get('editorWidget-background', 'input-background', 'dropdown-background'), bg),
+    surface_variant: o(get('input-background', 'list-hoverBackground', 'editorWidget-background'), bg),
+    on_background: text,
+    on_surface_variant: o(get('descriptionForeground', 'disabledForeground'), text),
+    primary: accent,
+    secondary: o(get('button-background', 'focusBorder'), accent),
+    tertiary: o(get('terminal-ansiMagenta', 'charts-purple'), dark ? 0xffc586c0 : 0xffaf00db),
+    success: o(get('testing-iconPassed', 'terminal-ansiGreen', 'charts-green'), dark ? 0xff89d185 : 0xff388a34),
+    warning: o(get('editorWarning-foreground', 'charts-yellow', 'terminal-ansiYellow'), dark ? 0xffcca700 : 0xffbf8803),
+    danger: o(get('errorForeground', 'editorError-foreground', 'charts-red'), dark ? 0xfff48771 : 0xffe51400),
+    info: o(get('editorInfo-foreground', 'charts-blue', 'terminal-ansiBlue'), accent),
+    code_bg: over(get('textCodeBlock-background', 'editor-background') ?? editorBg, editorBg),
+  };
+  // webviews do not get the editor's token colors: the terminal palette is the closest the theme gives
+  const ansi = (n: string, fallback: number) => o(get(`terminal-ansi${n}`), fallback);
+  const syntax = dark
+    ? [ansi('BrightMagenta', 0xffc586c0), ansi('BrightCyan', 0xff4ec9b0), ansi('Yellow', 0xffce9178), ansi('BrightGreen', 0xffb5cea8), o(get('editorLineNumber-foreground'), 0xff6a9955), ansi('BrightBlue', 0xffdcdcaa), ansi('BrightYellow', 0xff9cdcfe), text]
+    : [ansi('Magenta', 0xffaf00db), ansi('Cyan', 0xff267f99), ansi('Red', 0xffa31515), ansi('Green', 0xff098658), o(get('editorLineNumber-foreground'), 0xff008000), ansi('Blue', 0xff795e26), ansi('Yellow', 0xff001080), text];
+  SYNTAX_KEYS.forEach((k, i) => (seeds[k] = syntax[i]));
+  derive(seeds, new Set(Object.keys(seeds)), dark);
+  return { id: VSCODE_THEME_ID, name: 'VS Code', about: 'Your VS Code theme\'s colors', dark, builtIn: true, colors: seeds };
+}
+
 export const defaultTheme = (dark: boolean) => BUILT_IN.find((t) => t.id === (dark ? DARK_DEFAULT : LIGHT_DEFAULT))!;
+/** What custom themes build on and every theme takes missing colors from. */
+export const baseTheme = (dark: boolean) => BUILT_IN.find((t) => t.id === (dark ? DARK_BASE : LIGHT_DEFAULT))!;
 
 export function customFromJson(j: CustomThemeJson): AppTheme | null {
   if (!j || !j.name?.trim()) return null;
@@ -387,11 +491,11 @@ export function resolveTheme(theme: AppTheme, all: AppTheme[], depth = 0): Recor
   if (theme.builtIn || depth > 5) {
     m = { ...theme.colors };
   } else {
-    const base = all.find((t) => t.id === theme.base && t.id !== theme.id) ?? defaultTheme(theme.dark);
+    const base = all.find((t) => t.id === theme.base && t.id !== theme.id) ?? baseTheme(theme.dark);
     m = { ...resolveTheme(base, all, depth + 1), ...theme.colors };
     derive(m, new Set(Object.keys(theme.colors)), theme.dark);
   }
-  const def = defaultTheme(theme.dark);
+  const def = baseTheme(theme.dark);
   if (theme.id !== def.id) {
     for (const [k, v] of Object.entries(def.colors)) if (!MATERIAL_KEYS.has(k) && m[k] === undefined) m[k] = v;
   }
