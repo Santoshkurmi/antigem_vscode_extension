@@ -4,8 +4,13 @@
 **OpenCode** in one sidebar inside VS Code. They share one chat UI, one chat list and one settings screen. You can
 use them one at a time or all at once.
 
-It is the VS Code version of the [AntiGem Android app](https://github.com/santoshkurmi/antigem), with the same look,
-animations and features, adapted to the editor.
+It is the VS Code version of the [AntiGem Android app](https://github.com/Santoshkurmi/antigem), with the same look,
+animations and features, adapted to the editor. With **Connect phone**, the app on your phone can use the agents
+running here (the same chats on both), and the [AntiGem Browser Bridge](https://github.com/Santoshkurmi/antigem-browser-extension) Chrome extension lets agents use your
+real browser.
+
+**Install:** [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=santoshkurmi.antigem-vscode-extension) · [Open VSX](https://open-vsx.org/extension/santoshkurmi/antigem-vscode-extension) (for VSCodium, Cursor, Windsurf and other VS Code
+based editors). Or search **AntiGem** in the Extensions view.
 
 ![AntiGem next to the editor: a chat about the open file, with the file attached as a chip](media/screenshots/vscode-chat.png)
 
@@ -133,6 +138,34 @@ There is no voice on the desktop; everything else works like the app.
   There is no open network port.
 - **Setup:** *Settings → Browser*. Open the extension folder, *Load unpacked* in `chrome://extensions`, then
   *Register with Chrome*.
+- **Needed for:** the *Browser* MCP and plugins that use the browser (for example Google Flow). Everything else works
+  without it. The VSIX ships a copy; its source is the [AntiGem Browser Bridge](https://github.com/Santoshkurmi/antigem-browser-extension) repository.
+
+### Connect phone: use these agents from your phone
+- **What the phone gets:** the [AntiGem Android app](https://github.com/Santoshkurmi/antigem) shows the same chats as this sidebar, live, with every
+  agent, its subagents, images and files. A chat started on one side continues on the other.
+- **Files both ways:** the app's Files screen gets a *This phone* tab next to this PC's files, to copy and move files
+  and folders between them.
+- **Terminal (optional):** with *Allow terminal from phone* on, the app's terminal and Run configurations open on this
+  PC. Off by default.
+- **Setup, once:**
+  1. Turn on this PC's SSH server. *Settings → Connect phone* checks it and shows the steps: Linux `openssh-server`,
+     macOS *System Settings → General → Sharing → Remote Login*, Windows *Settings → Optional features → OpenSSH
+     Server* (and set the Wi-Fi to *Private*).
+  2. *Settings → Connect phone → Start pairing* shows a 6-digit code for 2 minutes and announces this PC on the Wi-Fi.
+  3. In the app: *Settings → Connect to PC → Add a PC*, pick this PC (or type the address shown here), type the code.
+- **Security:**
+  - The code is checked with SPAKE2: someone on the Wi-Fi cannot learn or guess it offline.
+  - The phone logs in over SSH with its own key; no password is stored on the phone.
+  - Its key is limited to reading the bridge token and tunnels to the bridge and hub ports (a shell only with the
+    terminal option).
+  - Nothing else listens on the network: the pairing port and its announcement exist only while pairing is open.
+  - *Phones allowed: One* (the default) replaces the old phone when a new one pairs. *Remove* takes a phone's key out
+    and restarts the bridge with a new token, ending a connection it has open.
+  - On Windows, for an administrator account, adding the key asks for one admin (UAC) prompt: the key goes in
+    `C:\ProgramData\ssh\administrators_authorized_keys`, as Windows' SSH server requires.
+- The protocol: [docs/connect-to-pc-protocol.md](https://github.com/Santoshkurmi/antigem/blob/master/docs/connect-to-pc-protocol.md) in the app's
+  repository.
 
 ### Custom plugins
 - **Compatible with the app:** AntiGem plugins work here too. They are skills plus optional MCP tools.
@@ -147,10 +180,11 @@ There is no voice on the desktop; everything else works like the app.
 
 ## Getting started
 
-1. Install at least one agent CLI: `agy`, `claude`, `codex` or `opencode` (or use *Install* in AntiGem's settings).
-2. Click the **AntiGem** icon in the activity bar.
-3. Pick the agents you want to use, then sign in to each one in its own CLI or from its *Account & CLI* page.
-4. Start a chat. Pick the project folder, model and agent, then type.
+1. Install AntiGem from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=santoshkurmi.antigem-vscode-extension) or [Open VSX](https://open-vsx.org/extension/santoshkurmi/antigem-vscode-extension).
+2. Install at least one agent CLI: `agy`, `claude`, `codex` or `opencode` (or use *Install* in AntiGem's settings).
+3. Click the **AntiGem** icon in the activity bar.
+4. Pick the agents you want to use, then sign in to each one in its own CLI or from its *Account & CLI* page.
+5. Start a chat. Pick the project folder, model and agent, then type.
 
 AntiGem starts its local bridge automatically. All VS Code windows share one bridge, so chats keep running while you
 switch windows.
@@ -211,6 +245,9 @@ on Windows it uses a named pipe and the registry, and has not been tested on a W
 - With several VS Code windows open, the first window runs the built-in MCP servers, Jarvis, plugins and the browser
   link for all of them.
 - The Chrome extension is installed with *Load unpacked*; it is not in the Chrome Web Store yet.
+- *Connect phone* is tested on Linux. On macOS and Windows it is written for them (the SSH key file, the admin prompt,
+  the Wi-Fi announcement) but not tested on a real PC yet; if the phone does not list the PC, type the address shown in
+  *Settings → Connect phone*.
 
 ## Troubleshooting
 
@@ -219,10 +256,22 @@ on Windows it uses a named pipe and the registry, and has not been tested on a W
 - **Nothing loads:** run **AntiGem: Show Logs**, then **AntiGem: Restart Bridge**.
 - **A port is taken:** change `antigem.bridgePort`, `antigem.hubPort` or `antigem.mcpPort`, then restart the bridge.
 
+## Related projects
+
+AntiGem comes in three parts that link to each other:
+
+| Project | What it is | Repository |
+|---|---|---|
+| **AntiGem** (Android app) | The coding agents, a Linux terminal, an editor and a browser on your phone. With **Connect to PC** it also uses the agents of a PC that runs AntiGem for VS Code. | [Santoshkurmi/antigem](https://github.com/Santoshkurmi/antigem) |
+| **AntiGem for VS Code** | The same agents and chat in a VS Code sidebar. Its **Connect phone** lets the app on your phone use them. | [Santoshkurmi/antigem_vscode_extension](https://github.com/Santoshkurmi/antigem_vscode_extension) · install: [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=santoshkurmi.antigem-vscode-extension), [Open VSX](https://open-vsx.org/extension/santoshkurmi/antigem-vscode-extension) |
+| **AntiGem Browser Bridge** (Chrome extension) | Lets agents in AntiGem for VS Code use your real Chrome. Not needed by the Android app, which has its own browser. | [Santoshkurmi/antigem-browser-extension](https://github.com/Santoshkurmi/antigem-browser-extension) · not in the Chrome Web Store yet: installed with *Load unpacked* from AntiGem for VS Code |
+
 ## Links
 
-- AntiGem Android app: <https://github.com/santoshkurmi/antigem>
-- This extension's source and issues: <https://github.com/santoshkurmi/antigem_vscode_extension>
+- AntiGem Android app: <https://github.com/Santoshkurmi/antigem>
+- This extension's source and issues: <https://github.com/Santoshkurmi/antigem_vscode_extension>
+- Install: [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=santoshkurmi.antigem-vscode-extension) · [Open VSX](https://open-vsx.org/extension/santoshkurmi/antigem-vscode-extension)
+- AntiGem Browser Bridge (Chrome extension): <https://github.com/Santoshkurmi/antigem-browser-extension>
 - For reviewers and contributors:
   - [ARCHITECTURE.md](ARCHITECTURE.md): how it works and where everything is.
   - [BUILDING.md](BUILDING.md): how to build and package it.
