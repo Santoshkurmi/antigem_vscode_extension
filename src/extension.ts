@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { AppHost, type Platform, type ViewPort } from './core/host';
 import { agentFlags, BridgeManager, cliPathArgs } from './core/bridge/BridgeManager';
 import { McpHost } from './core/mcp/server';
@@ -23,6 +24,7 @@ import { CodexBackend } from './core/codex/CodexBackend';
 import { ClaudeBackend } from './core/claude/ClaudeBackend';
 import { OpenCodeBackend } from './core/opencode/OpenCodeBackend';
 import { PreviewServer } from './core/preview/server';
+import { showSystemNote, systemNotifyUnavailable } from './systemNotify';
 import type { AgentKind, ChatAttachment } from '../shared/model';
 import type { EditorContextView, FileSuggestion, HostToView, ViewToHost } from '../shared/protocol';
 
@@ -33,6 +35,8 @@ const preview = new PreviewServer();
 let previewReady: Promise<void> | null = null;
 
 let sidebarView: vscode.WebviewView | undefined;
+/** The count on the AntiGem icon (kept for a side bar that is created later). */
+let badge: vscode.ViewBadge | undefined;
 
 const MAX_SELECTION = 40_000;
 const EXCLUDE = '**/{node_modules,.git,dist,build,out,.next,.venv,__pycache__,target}/**';
@@ -70,8 +74,9 @@ function connectWebview(
   initialConversationId: string | null,
   disposables: vscode.Disposable[],
   onTitle?: (title: string) => void,
+  screen?: Pick<ViewPort, 'isVisible' | 'reveal'>,
 ): string {
-  const id = host!.attachView({ kind, initialConversationId, onTitle, post: (m) => void webview.postMessage(m) });
+  const id = host!.attachView({ kind, initialConversationId, onTitle, post: (m) => void webview.postMessage(m), ...screen });
   disposables.push(webview.onDidReceiveMessage((m: ViewToHost) => void host?.handle(id, m)));
   return id;
 }
@@ -86,9 +91,17 @@ function openChatPanel(context: vscode.ExtensionContext, conversationId: string 
   void (previewReady ?? Promise.resolve()).then(() => {
     panel.webview.html = webviewHtml(panel.webview, context.extensionUri);
   });
-  const id = connectWebview(panel.webview, 'panel', conversationId, disposables, (t) => {
-    panel.title = t.length > 40 ? `${t.slice(0, 40)}…` : t;
-  });
+  const id = connectWebview(
+    panel.webview,
+    'panel',
+    conversationId,
+    disposables,
+    (t) => {
+      panel.title = t.length > 40 ? `${t.slice(0, 40)}…` : t;
+    },
+    { isVisible: () => panel.visible, reveal: () => panel.reveal() },
+  );
+  disposables.push(panel.onDidChangeViewState(() => host?.attentionChanged()));
   panel.onDidDispose(() => {
     host?.detachView(id);
     disposables.forEach((d) => d.dispose());
@@ -137,6 +150,22 @@ export function activate(context: vscode.ExtensionContext) {
   const homeDir = () => folders()[0]?.uri.fsPath ?? os.homedir();
 
   const kv = { get: <T,>(k: string) => context.globalState.get<T>(k), set: (k: string, v: unknown) => void context.globalState.update(k, v) };
+
+  /** The link a notification opens: VS Code comes forward and hands it to the URI handler below (opens the chat). */
+  const chatUri = (id: string) => `${vscode.env.uriScheme}://${context.extension.id}/chat?id=${encodeURIComponent(id)}`;
+  /** A desktop notification was clicked (Linux reports it here): show the chat, and bring this window forward. */
+  const openFromNotification = (id: string) => {
+    if (!id) return;
+    host?.revealChat(id);
+    // the desktop's vscode:// handler raises the VS Code window (an extension cannot focus it by itself)
+    try {
+      const p = spawn('xdg-open', [chatUri(id)], { stdio: 'ignore', detached: true });
+      p.on('error', () => void vscode.env.openExternal(vscode.Uri.parse(chatUri(id))));
+      p.unref();
+    } catch {
+      void vscode.env.openExternal(vscode.Uri.parse(chatUri(id)));
+    }
+  };
 
   const bridge = new BridgeManager({
     binPath: path.join(context.extensionPath, 'bin', `antigem-bridge-${process.platform}-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`),
@@ -356,6 +385,32 @@ export function activate(context: vscode.ExtensionContext) {
         }
       });
     },
+    // ---- chat notifications (finished / needs you) while the chat is not on screen
+    windowFocused: () => vscode.window.state.focused,
+    chatAlert: (a, open) => {
+      const text = `${a.title}: ${a.body.split('\n').join(' — ')}`;
+      const items = a.conversationId ? ['Open'] : [];
+      const shown =
+        a.kind === 'error'
+          ? vscode.window.showErrorMessage(text, ...items)
+          : a.kind === 'done'
+            ? vscode.window.showInformationMessage(text, ...items)
+            : vscode.window.showWarningMessage(text, ...items);
+      void shown.then((picked) => {
+        if (picked) open();
+      });
+    },
+    systemAlertUnavailable: () => systemNotifyUnavailable(vscode.env.remoteName),
+    systemAlert: (a) =>
+      showSystemNote(
+        { title: a.title, body: a.body, openUri: chatUri(a.conversationId), icon: vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png').fsPath },
+        () => openFromNotification(a.conversationId),
+        log,
+      ),
+    setBadge: (count, tooltip) => {
+      badge = count > 0 ? { value: count, tooltip } : undefined;
+      if (sidebarView) sidebarView.badge = badge;
+    },
     pickFolder: async () => {
       const r = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: 'Use this folder' });
       return r?.[0]?.fsPath ?? null;
@@ -479,6 +534,16 @@ export function activate(context: vscode.ExtensionContext) {
       if (e.textEditor === vscode.window.activeTextEditor) pushContext();
     }),
     vscode.window.onDidChangeVisibleTextEditors(pushContext),
+    // a chat on screen again: its notifications count as read
+    vscode.window.onDidChangeWindowState(() => host?.attentionChanged()),
+    // vscode://<this extension>/chat?id=… (a clicked desktop notification): open that chat
+    vscode.window.registerUriHandler({
+      handleUri(uri) {
+        if (uri.path !== '/chat') return;
+        const id = new URLSearchParams(uri.query).get('id');
+        if (id) host?.revealChat(id);
+      },
+    }),
     vscode.window.registerWebviewViewProvider(
       'antigem.chat',
       {
@@ -491,8 +556,13 @@ export function activate(context: vscode.ExtensionContext) {
           await previewReady;
           view.webview.html = webviewHtml(view.webview, context.extensionUri);
           const disposables: vscode.Disposable[] = [];
-          const id = connectWebview(view.webview, 'sidebar', null, disposables);
+          const id = connectWebview(view.webview, 'sidebar', null, disposables, undefined, {
+            isVisible: () => view.visible,
+            reveal: () => void vscode.commands.executeCommand('antigem.chat.focus'),
+          });
           sidebarViewId = id;
+          view.badge = badge;
+          disposables.push(view.onDidChangeVisibility(() => host?.attentionChanged()));
           view.onDidDispose(() => {
             host?.detachView(id);
             disposables.forEach((d) => d.dispose());

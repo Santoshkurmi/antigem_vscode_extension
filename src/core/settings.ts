@@ -5,6 +5,7 @@ import type { AgentKind } from '../../shared/model';
 import type { SettingFormField, SettingsPage, SettingsSection, SlashCommandView } from '../../shared/protocol';
 import type { KeyValueStore } from './types';
 import { hiddenBlock } from './text';
+import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from './notifications';
 
 export interface CustomCommand {
   name: string;
@@ -266,6 +267,57 @@ export class HostSettings {
           description: 'Instructions added to your chats',
           badge: String(this.contextEntries().filter((e) => e.enabled).length + (this.builtInEnabled() ? 1 : 0)),
         },
+        { kind: 'page', id: 'notifications', label: 'Notifications', icon: 'notifications', description: this.notifySummary() },
+      ],
+    };
+  }
+
+  // ---------------------------------------------------------------- notifications
+
+  notifyPrefs(): NotifyPrefs {
+    return { ...DEFAULT_NOTIFY_PREFS, ...(this.store.get<Partial<NotifyPrefs>>('notify.prefs') ?? {}) };
+  }
+
+  private notifySummary(): string {
+    const p = this.notifyPrefs();
+    if (!p.done && !p.waiting) return 'Off';
+    if (!p.system && !p.inApp && !p.badge) return 'Off';
+    return p.done && p.waiting ? 'When a chat finishes or needs you' : p.done ? 'When a chat finishes' : 'When a chat needs you';
+  }
+
+  /** Settings → Notifications. [systemUnavailable] = why desktop notifications cannot be shown here (null = they can). */
+  notificationsPage(systemUnavailable: string | null): SettingsPage {
+    const p = this.notifyPrefs();
+    return {
+      id: 'notifications',
+      title: 'Notifications',
+      sections: [
+        {
+          id: 'notify.when',
+          title: '',
+          description: 'For chats you send from AntiGem, never for the chat you are looking at.',
+          items: [
+            { kind: 'toggle', id: 'done', label: 'A reply is finished', description: 'Also when a chat stops with an error. Not when you stop it yourself.', value: p.done },
+            { kind: 'toggle', id: 'waiting', label: 'An agent needs you', description: 'A permission request (run a command, edit a file…) or a question', value: p.waiting },
+          ],
+        },
+        {
+          id: 'notify.how',
+          title: '',
+          items: [
+            {
+              kind: 'toggle',
+              id: 'system',
+              label: 'System notifications',
+              description: systemUnavailable ?? 'From your desktop while VS Code is in the background. Click one to jump to the chat.',
+              value: p.system && !systemUnavailable,
+              disabled: !!systemUnavailable,
+            },
+            { kind: 'toggle', id: 'inApp', label: 'VS Code pop-ups', description: 'While VS Code is in front but the chat is not on screen', value: p.inApp },
+            { kind: 'toggle', id: 'badge', label: 'Count on the AntiGem icon', description: 'Chats that finished or wait for you, until you open them', value: p.badge },
+            { kind: 'button', id: 'notify.test', label: 'Send a test notification', description: 'Shows one the way a finished chat is announced' },
+          ],
+        },
       ],
     };
   }
@@ -416,6 +468,10 @@ export class HostSettings {
 
   /** Returns true when the change was a host setting. */
   change(page: string, id: string, value: unknown, rowId?: string): boolean {
+    if (page === 'notifications' && id in DEFAULT_NOTIFY_PREFS) {
+      this.store.set('notify.prefs', { ...this.notifyPrefs(), [id]: value === true });
+      return true;
+    }
     if (page === 'context' && id === 'builtin') {
       this.store.set('global.context.builtin', value === true);
       return true;

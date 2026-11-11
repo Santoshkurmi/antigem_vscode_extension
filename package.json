@@ -34,7 +34,8 @@
   "icon": "media/icon.png",
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onUri"
   ],
   "contributes": {
     "viewsContainers": {

@@ -6,6 +6,7 @@ import type { AgentKind, ChatAttachment, ChatMessage, Conversation } from '../..
 import type { ChatPatch, ChatSearchHit, EditorContextView, FileSuggestion, HostToView, ProjectView, SettingItem, SettingsPage, SettingsSection, UiPrefs, ViewToHost, WorkspaceFolder } from '../../shared/protocol';
 import path from 'node:path';
 import { HostSettings } from './settings';
+import { ChatNotifier, type ChatAlert } from './notifications';
 import type { NotesStore } from './mcp/notes';
 import type { JarvisHooks, JarvisHostApi } from './jarvis/types';
 import type { BrowserHooks } from './browser/settings';
@@ -69,6 +70,16 @@ export interface Platform {
   choose?(message: string, options: string[]): Promise<string | undefined>;
   /** A system notification (VS Code toast), optionally with one action button. */
   notify?(message: string, action?: { label: string; run: () => void }): void;
+  /** The VS Code window has the focus (absent = always). */
+  windowFocused?(): boolean;
+  /** A chat alert as a VS Code pop-up; [open] shows the chat (its "Open" button). */
+  chatAlert?(alert: ChatAlert, open: () => void): void;
+  /** A chat alert as a desktop notification (a click opens the chat); false when it could not be shown. */
+  systemAlert?(alert: ChatAlert): Promise<boolean>;
+  /** Why desktop notifications cannot be shown here (null = they can; absent = never). */
+  systemAlertUnavailable?(): string | null;
+  /** The count on the AntiGem icon (0 = none). */
+  setBadge?(count: number, tooltip: string): void;
 }
 
 export interface ViewPort {
@@ -78,6 +89,10 @@ export interface ViewPort {
   onTitle?: (title: string) => void;
   /** Conversation an editor panel opens with. */
   initialConversationId?: string | null;
+  /** On screen now (the side bar is open on it / the editor tab is the visible one); absent = always. */
+  isVisible?(): boolean;
+  /** Brings the view to the front. */
+  reveal?(): void;
 }
 
 interface ViewState {
@@ -104,6 +119,8 @@ export class AppHost {
   private editorCtx: EditorContextView | null = null;
   /** The view the user interacted with last (VS Code commands deliver chips there). */
   private lastActive: string | null = null;
+  /** Tells the user when a chat they sent finishes or needs them (and they are not looking at it). */
+  private notifier: ChatNotifier;
 
   constructor(
     private backends: Partial<Record<AgentKind, AgentBackend>>,
@@ -119,6 +136,17 @@ export class AppHost {
       if (saved.theme == null || saved.theme === 'auto') store.set('ui.prefs', { ...saved, theme: 'vscode' });
     }
     store.set('ui.themeDefaultVscode', true);
+    this.notifier = new ChatNotifier({
+      backend: (k) => this.backendFor(k),
+      chatTitle: (id) => this.rawConversations().find((c) => c.id === id)?.title || 'Chat',
+      isWatching: (id) => this.isWatching(id),
+      windowFocused: () => this.platform.windowFocused?.() ?? true,
+      prefs: () => this.settings.notifyPrefs(),
+      system: platform.systemAlert && ((a) => (platform.systemAlertUnavailable?.() ? Promise.resolve(false) : platform.systemAlert!(a))),
+      inApp: platform.chatAlert && ((a) => platform.chatAlert!(a, () => this.revealChat(a.conversationId))),
+      setBadge: platform.setBadge && ((n, tip) => platform.setBadge!(n, tip)),
+      log,
+    });
     for (const b of Object.values(this.backends)) {
       if (!b) continue;
       this.unsubs.push(
@@ -154,6 +182,37 @@ export class AppHost {
   /** Sends a message to every view. */
   broadcastAll(msg: HostToView) {
     this.broadcast(msg);
+  }
+
+  // ------------------------------------------------------------------ chat notifications
+
+  /** The user has this chat on screen: VS Code focused and a visible view shows it. */
+  private isWatching(conversationId: string): boolean {
+    if (!(this.platform.windowFocused?.() ?? true)) return false;
+    for (const v of this.views.values()) if (v.conversationId === conversationId && (v.port.isVisible?.() ?? true)) return true;
+    return false;
+  }
+
+  /** Window focus or a view's visibility changed: chats now on screen are read. */
+  attentionChanged() {
+    this.notifier.seen();
+  }
+
+  /** A notification was clicked: show the chat (the view that has it, else the side bar, else an editor tab). */
+  revealChat(conversationId: string) {
+    if (!conversationId) return;
+    const views = [...this.views.values()];
+    const showing = views.find((v) => v.conversationId === conversationId && v.port.reveal);
+    if (showing) {
+      showing.port.reveal!();
+    } else {
+      const side = views.find((v) => v.port.kind === 'sidebar');
+      if (side) {
+        this.show(side, conversationId, this.agentOf(conversationId) ?? side.agent);
+        side.port.reveal?.();
+      } else this.platform.openInEditor(conversationId);
+    }
+    this.notifier.markRead(conversationId);
   }
 
   // ------------------------------------------------------------------ shared prefs (theme MCP) and notes
@@ -440,6 +499,8 @@ export class AppHost {
       };
     }
     if (page === 'connection') return this.settings.connectionPage(this.platform.bridgeInfo(), !!this.platform.showLogs);
+    if (page === 'notifications')
+      return this.settings.notificationsPage(this.platform.systemAlert ? (this.platform.systemAlertUnavailable?.() ?? null) : 'Not available here');
     if (page === 'agy') {
       // Antigravity page + which agy history the hub uses (host-owned: switching restarts the bridge)
       const p = (await this.backendForPage(page, '')?.settings?.page(page)) ?? { id: page, title: 'Antigravity', sections: [] };
@@ -722,6 +783,7 @@ export class AppHost {
     v.port.post({ type: 'chat', conversationId, patch: reset });
     v.port.onTitle?.(conversationId ? (this.allConversations().find((c) => c.id === conversationId)?.title ?? 'Chat') : 'New Chat');
     if (!conversationId) return;
+    this.notifier.seen();
     const backend = this.backendFor(agent);
     if (!backend) {
       v.port.post({ type: 'chat', conversationId, patch: { isLoading: false, error: `${agent} chats are not supported yet in the extension.` } });
@@ -842,6 +904,8 @@ export class AppHost {
           v.meta = {};
           v.unsubscribe = backend.subscribe(msg.conversationId, (state) => this.push(v, msg.conversationId, state));
         }
+        // tell the user when this turn is over / it needs them, if they are not looking then
+        this.notifier.track(msg.conversationId, msg.agent);
         // editor selections travel as text (a hidden block the chat shows as chips); files go to the backend
         const selections = msg.attachments.filter((a) => a.kind === 'selection' || a.selectionText != null);
         const others = msg.attachments.filter((a) => !selections.includes(a));
@@ -860,6 +924,7 @@ export class AppHost {
         return;
       }
       case 'stop':
+        this.notifier.stopped(msg.conversationId);
         await this.backendFor(this.agentOf(msg.conversationId) ?? v.agent)?.stop(msg.conversationId);
         return;
       case 'approval':
@@ -963,7 +1028,7 @@ export class AppHost {
         }
         if (!this.settings.change(msg.page, msg.id, msg.value, msg.rowId)) {
           await this.backendForPage(msg.page, msg.id)?.settings?.change(msg.page, msg.id, msg.value, msg.rowId);
-        }
+        } else if (msg.page === 'notifications') this.notifier.refreshBadge();
         this.refreshSettings();
         return;
       }
@@ -975,6 +1040,8 @@ export class AppHost {
           result = 'Bridge restarted';
         } else if (msg.id === 'conn.logs') {
           this.platform.showLogs?.();
+        } else if (msg.id === 'notify.test') {
+          result = await this.notifier.test();
         } else if (this.jarvis && (msg.page === 'jarvis' || msg.page.startsWith('jarvis.'))) {
           result = await this.jarvis.settings.action(msg.page, msg.id, msg.rowId, msg.actionId, msg.values);
         } else if (this.browser && (msg.page === 'browser' || msg.page.startsWith('browser.'))) {
@@ -1250,6 +1317,7 @@ export class AppHost {
   }
 
   dispose() {
+    this.notifier.dispose();
     for (const v of this.views.values()) v.unsubscribe?.();
     this.views.clear();
     this.jarvis?.dispose();
