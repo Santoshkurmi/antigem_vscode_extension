@@ -39,6 +39,8 @@ export interface MemoryHooks {
    * = what the user typed (ranks the memories); [dispatch] sends the request to the agent.
    */
   send(req: SendRequest, agent: AgentKind, typed: string, dispatch: (req: SendRequest) => Promise<void>): Promise<void>;
+  /** The chat lost its memory text (compacted, its first prompt undone): its next message carries it again. */
+  forget(conversationId: string): void;
   /** A view opened this chat: catch up on turns that finished while nothing followed it. */
   opened(conversationId: string, agent: AgentKind): void;
   /** The chat was deleted: its history file goes too. */

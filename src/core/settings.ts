@@ -43,6 +43,8 @@ const TOKEN_RE = /(?<=^|\s)\/([A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
 const PLU_TOKEN_RE = /(?<=^|\s)\/(plu:[A-Za-z0-9_-]+(?::[A-Za-z0-9._-]*)?|[A-Za-z0-9][A-Za-z0-9_-]{0,47})(?=\s|$)/g;
 
 const MAX_REMEMBERED_CHATS = 600;
+/** Kept instead of a fingerprint for a chat whose first prompt was undone: its next message is a first message again. */
+const RESTARTED = 'restart';
 
 const entriesBlock = (list: ContextEntry[]) => list.map((e) => (e.title.trim() ? `### ${e.title.trim()}\n` : '') + e.text.trim()).join('\n\n');
 
@@ -215,6 +217,11 @@ export class HostSettings {
     this.store.set('global.context.sent', m);
   }
 
+  /** The chat's first prompt was undone (rewind): it starts over, so its next message carries the context as a first message. */
+  restartContext(chatId: string) {
+    if (chatId) this.markSent(chatId, RESTARTED);
+  }
+
   /**
    * A normal chat message with the hidden context in front (GlobalContext.wrap): the first-message part on a new chat,
    * and again when it changed since this chat got it; every-message entries always.
@@ -223,14 +230,16 @@ export class HostSettings {
     const first = this.firstMessageBody(agent);
     const fp = this.fingerprint(agent);
     const known = chatId ? this.sentMap()[chatId] : undefined;
-    const sendFirst = first != null && (isNew || known !== fp);
+    // a chat whose first prompt was undone keeps its id (the view sends it as not new) but starts over
+    const fresh = isNew || known === RESTARTED;
+    const sendFirst = first != null && (fresh || known !== fp);
     const everyOwn = this.activeEntries(agent).filter((e) => e.everyMessage);
     const every = everyOwn.length ? "[The user's standing instructions, sent with every message]\n" + entriesBlock(everyOwn) : null;
     if (!sendFirst && !every) return text;
     let note = '';
     if (sendFirst) {
       note +=
-        isNew
+        fresh
           ? '[AntiGem app context: from the app the user chats through, not written by the user. Follow it for this whole chat; it is not repeated.]'
           : known
             ? '[AntiGem app context, updated: it replaces the earlier copy in this chat. Follow it from now on.]'

@@ -1463,9 +1463,16 @@ export class AppHost {
           this.toast(v, 'info', 'Edit & rewind is not available for this agent yet.');
           return;
         }
+        const wasFirst = b.getState(msg.conversationId).messages.find((m) => m.role === 'USER')?.id === msg.messageId;
         const prompt = await b.rewind(msg.conversationId, msg.messageId, msg.restoreFiles === true);
         // rewinding the first prompt deletes the chat (as in the app): continue on a new chat with that prompt
         if (v.conversationId === msg.conversationId && !b.conversations().some((c) => c.id === msg.conversationId)) this.show(v, null, b.kind);
+        // ... or the chat stays under the same id but starts over (Claude, OpenCode, Codex): its next message is a first
+        // message again, with the global context and the Agent memory text
+        if (wasFirst && prompt != null && b.conversations().some((c) => c.id === msg.conversationId)) {
+          this.settings.restartContext(msg.conversationId);
+          this.memory?.forget(msg.conversationId);
+        }
         if (prompt != null) v.port.post({ type: 'insertText', text: prompt });
         return;
       }
