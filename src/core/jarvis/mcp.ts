@@ -981,7 +981,14 @@ class JarvisMcp {
         break;
       case 'appearance': {
         const p = j.host.uiPrefs();
-        out.appearance = { theme_mode: p.theme ?? 'vscode', light_theme: p.lightTheme ?? null, dark_theme: p.darkTheme ?? null, chat_font_scale: p.chatFontScale ?? 1 };
+        out.appearance = {
+          theme_mode: p.theme ?? 'vscode',
+          light_theme: p.lightTheme ?? null,
+          dark_theme: p.darkTheme ?? null,
+          chat_font_scale: p.chatFontScale ?? 1,
+          group_agent_steps: p.groupAgentSteps !== false,
+          show_message_stats: p.showMessageStats !== false,
+        };
         break;
       }
       case 'projects': {
@@ -1292,6 +1299,26 @@ class JarvisMcp {
           return null;
         },
       },
+      ...(
+        [
+          ['group_agent_steps', 'groupAgentSteps', 'Fold runs of agent thinking and tool calls into one progress pill (off: every step is its own card)'],
+          ['show_message_stats', 'showMessageStats', 'Token, cache and time stats under each reply'],
+        ] as const
+      ).map(
+        ([key, pref, about]): Setting => ({
+          key,
+          about,
+          values: 'true|false',
+          own: false,
+          get: () => j.host.uiPrefs()[pref] !== false,
+          set: (v) => {
+            const b = parseBool(v);
+            if (b == null) return 'Use true or false.';
+            j.host.patchUiPrefs({ [pref]: b });
+            return null;
+          },
+        }),
+      ),
       {
         key: 'new_chat_agent',
         about: 'Agent of new chats',

@@ -22,13 +22,14 @@ import {
   pageRequestedAt,
   retryPage,
 } from '../state/settings';
-import { agentStatus, setUi, state } from '../state/store';
+import { agentStatus } from '../state/store';
 import { BottomSheet, Dialog, DropdownMenu, Icon, IconButton, nextFrame, type IconName } from '../ui/primitives';
 import { AgentMark } from './AgentStatus';
 import { hasIcon } from '../ui/iconData';
 import { agentAccent, alpha, stateColor } from '../util/format';
 import { ThemesPage, themeName } from './Themes';
-import { fontScale } from '../theme';
+import { fontScale, groupAgentSteps, showMessageStats } from '../theme';
+import { MIN_STEPS, MIN_TOOLS } from '../state/stepGroups';
 import { GemmyPreview, gemmyEnabled, setGemmyEnabled } from './Gemmy';
 import { renderState } from '../state/render';
 import { DOC_PAGE_PREFIX, DocPage } from './DocPage';
@@ -180,7 +181,7 @@ function HostPage(props: { id: string }) {
               tint: 'var(--accent-alt)',
               title: 'Appearance',
               value: fontScale() !== 1 ? `${Math.round(fontScale() * 100)}%` : undefined,
-              onClick: () => pushPage({ id: LOCAL_APPEARANCE, title: 'Appearance', subtitle: 'Chat text size, the chat list and Gemmy' }),
+              onClick: () => pushPage({ id: LOCAL_APPEARANCE, title: 'Appearance', subtitle: 'Chat text size, agent steps, message stats and Gemmy' }),
             },
             // Settings → STEM & diagrams (host page 'stem', src/core/render), where the app puts it
             {
@@ -1741,13 +1742,26 @@ function AppearancePage() {
         <div class="pv-user">How does AntiGem connect to the agents?</div>
         <div class="pv-assistant">The extension talks to each agent's own server and streams its steps and tool calls into this chat.</div>
       </div>
-      <div class="settings-card toggle-card" onClick={() => setUi('groupByWorkspace', !state.ui.groupByWorkspace)}>
+      {/* runs of a reply's thinking and tool calls fold into one progress pill (state/stepGroups.ts) */}
+      <div class="settings-card toggle-card" onClick={() => setUiPref('groupAgentSteps', !groupAgentSteps())}>
         <div class="toggle-row">
           <div class="item-label">
-            <div class="item-title">Group Chats by Workspace</div>
-            <div class="hint">Categorize chat history in the drawer under workspace folders</div>
+            <div class="item-title">Group Agent Steps</div>
+            <div class="hint">
+              Runs of thinking and tool calls ({MIN_TOOLS}+ tool calls or {MIN_STEPS}+ steps) fold into one pill that shows the
+              progress; click it to see the steps. Off: every step is its own card.
+            </div>
           </div>
-          <MSwitch checked={state.ui.groupByWorkspace} onChange={(v) => setUi('groupByWorkspace', v)} label="Group Chats by Workspace" />
+          <MSwitch checked={groupAgentSteps()} onChange={(v) => setUiPref('groupAgentSteps', v)} label="Group Agent Steps" />
+        </div>
+      </div>
+      <div class="settings-card toggle-card" onClick={() => setUiPref('showMessageStats', !showMessageStats())}>
+        <div class="toggle-row">
+          <div class="item-label">
+            <div class="item-title">Show Message Stats</div>
+            <div class="hint">Token counts, cache percentage and time under each reply (click them for the details)</div>
+          </div>
+          <MSwitch checked={showMessageStats()} onChange={(v) => setUiPref('showMessageStats', v)} label="Show Message Stats" />
         </div>
       </div>
       {/* Gemmy: the floating cartoon buddy (on by default; first offered by the one-time "Meet Gemmy" dialog) */}

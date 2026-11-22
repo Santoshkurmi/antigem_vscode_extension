@@ -158,5 +158,11 @@ export const fontScale = () => {
   return Number.isFinite(v) && v > 0 ? Math.min(1.6, Math.max(0.75, v)) : 1;
 };
 
+/** Settings → Appearance → Group Agent Steps (on by default): runs of thinking and tool calls fold into one pill. */
+export const groupAgentSteps = () => uiPrefs()?.groupAgentSteps !== false;
+
+/** Settings → Appearance → Show Message Stats (on by default): the token / cache / time pill under each reply. */
+export const showMessageStats = () => uiPrefs()?.showMessageStats !== false;
+
 /** Which limit the composer's model pill shows: '5h' (default) or '7d' (Settings in the model picker). */
 export const quotaPillWindow = () => (uiPrefs()?.quotaPillWindow === '7d' ? '7d' : '5h');

@@ -1,8 +1,8 @@
 // ui/components/MessageBubble.kt (UserMessageBubble, AssistantMessageFooter, TokenUsageTelemetryPill) and how
 // ui/chat/ChatFeedCache.kt turns an assistant message into blocks + footer.
-import { createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import type { ChatAttachment, ChatMessage, TokenUsage } from '@shared/model';
-import { parseIncremental } from '../markdown/parse';
+import { parseIncremental, type Block } from '../markdown/parse';
 import { BlockView } from './Markdown';
 import { ThinkingAccordion } from './Thinking';
 import { setArtifactsOpen } from './Artifacts';
@@ -16,7 +16,9 @@ import { stripMemoryBlocks } from '../state/memory';
 import { Collapse, Dialog, Icon, IconButton } from '../ui/primitives';
 import { compactTokens, formatDuration, shortModelName } from '../util/format';
 import { copyText, send, state } from '../state/store';
-import { themeMode } from '../theme';
+import { groupAgentSteps, showMessageStats, themeMode } from '../theme';
+import { findRuns, isRunOpen, keepsCard, toggleRun, type Step, type StepRun } from '../state/stepGroups';
+import { StepGroupPill } from './StepGroupPill';
 import { findPathMentions, shortName } from '../util/mentions';
 
 // ------------------------------------------------------------------------------------------------ user
@@ -267,6 +269,7 @@ const THOUGHT_MARK = /(^|\n)[ \t]*<(!--\s*)?thought/;
 /**
  * An assistant message: its thought (from thoughtText, as ChatFeedCache prepends it), its blocks, then the footer
  * once the reply is done. Only the streaming message's blocks ever re-parse, and only their tail.
+ * With Group Agent Steps on, runs of thinking and tool steps fold into a StepGroupPill (state/stepGroups.ts).
  */
 export function AssistantMessage(props: { msg: ChatMessage }) {
   const m = () => props.msg;
@@ -274,26 +277,69 @@ export function AssistantMessage(props: { msg: ChatMessage }) {
   const blocks = createMemo(() => parseIncremental(m().id, m().content, m().toolCalls));
   const tool = (id: string) => m().toolCalls.find((t) => t.id === id);
   const showFooter = () => !m().isStreaming && m().content.length > 0;
+  const stepOf = (b: Block): Step | null => {
+    if (b.t === 'thought') return { kind: 'thought', text: b.thought, durationMs: b.durationMs, streaming: b.streaming };
+    if (b.t === 'tool') {
+      const call = b.synthetic ?? tool(b.id);
+      return call && !keepsCard(call) ? { kind: 'tool', call } : null;
+    }
+    return null;
+  };
+  // the runs to fold: the thought before the blocks is index -1 (it is still being written while nothing follows it)
+  const runs = createMemo<StepRun[]>(() => {
+    if (!groupAgentSteps()) return [];
+    const bs = blocks();
+    const entries: (Step | null)[] = [];
+    if (hasThought())
+      entries.push({ kind: 'thought', text: m().thoughtText!, durationMs: m().thoughtDurationMs ?? null, streaming: m().isStreaming && bs.length === 0 });
+    for (const b of bs) entries.push(stepOf(b));
+    return findRuns(m().id, entries, hasThought() ? -1 : 0, m().isStreaming, m().createdAt);
+  });
+  const runAt = (i: number) => runs().find((r) => i >= r.start && i < r.end);
   return (
     <div class="assistant-msg">
       <Show when={hasThought()}>
-        <div class="feed-block">
-          <div class="md-thought">
-            <ThinkingAccordion id={m().id + ':thought'} text={m().thoughtText!.trim()} durationMs={m().thoughtDurationMs} streaming={m().isStreaming} />
+        <StepSlot run={runAt(-1)} index={-1}>
+          <div class="feed-block">
+            <div class="md-thought">
+              <ThinkingAccordion id={m().id + ':thought'} text={m().thoughtText!.trim()} durationMs={m().thoughtDurationMs} streaming={m().isStreaming} />
+            </div>
           </div>
-        </div>
+        </StepSlot>
       </Show>
       <Index each={blocks()}>
-        {(b) => (
-          <div class="feed-block">
-            <BlockView block={b()} resolveTool={tool} streaming={m().isStreaming} thoughtKey={m().id} />
-          </div>
+        {(b, i) => (
+          <StepSlot run={runAt(i)} index={i}>
+            <div class="feed-block">
+              <BlockView block={b()} resolveTool={tool} streaming={m().isStreaming} thoughtKey={m().id} />
+            </div>
+          </StepSlot>
         )}
       </Index>
       <Show when={showFooter()}>
         <AssistantFooter msg={m()} />
       </Show>
     </div>
+  );
+}
+
+/**
+ * One block of a reply inside a folded run: the run's first block brings the pill; the blocks show only while the
+ * pill is open. A block outside any run just shows.
+ */
+function StepSlot(props: { run: StepRun | undefined; index: number; children: JSX.Element }) {
+  const open = () => !!props.run && isRunOpen(props.run.key);
+  return (
+    <>
+      <Show when={props.run?.start === props.index ? props.run : undefined}>
+        {(r) => (
+          <div class="feed-block">
+            <StepGroupPill run={r()} open={open()} onToggle={() => toggleRun(r().key)} />
+          </div>
+        )}
+      </Show>
+      <Show when={!props.run || open()}>{props.children}</Show>
+    </>
   );
 }
 
@@ -314,7 +360,8 @@ export function AssistantFooter(props: { msg: ChatMessage }) {
   };
   return (
     <div class="assistant-footer" ref={root}>
-      <Show when={props.msg.tokenUsage}>{(u) => <TokenPill usage={u()} />}</Show>
+      {/* the token / cache / time stats: Settings → Appearance → Show Message Stats */}
+      <Show when={showMessageStats() && props.msg.tokenUsage}>{(u) => <TokenPill usage={u()} />}</Show>
       <div class="assistant-actions">
         <IconButton icon="copy" iconSize={15} color="color-mix(in srgb, var(--on-surface) 40%, transparent)" title="Copy message" onClick={() => copyText(stripMemoryBlocks(props.msg.content), 'Copied response')} />
         <IconButton icon="select_all" iconSize={16} color="color-mix(in srgb, var(--on-surface) 40%, transparent)" title="Select text" onClick={selectAll} />

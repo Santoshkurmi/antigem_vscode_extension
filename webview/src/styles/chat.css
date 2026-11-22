@@ -507,6 +507,66 @@
   text-overflow: ellipsis;
 }
 
+/* ------------------------------------------------------------------ step pill (StepGroupPill) */
+
+.step-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 3px 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  text-align: left;
+  background: color-mix(in srgb, var(--on-surface) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--on-surface) 8%, transparent);
+  transition: background-color 120ms;
+}
+.step-pill:hover {
+  background: color-mix(in srgb, var(--on-surface) 7%, transparent);
+}
+.step-pill-mark {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.step-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.step-pill-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.step-pill-title {
+  font-size: calc(13 * var(--sp));
+  font-weight: 600;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* the clock does not change width (and push the counts) as the seconds go by */
+  font-variant-numeric: tabular-nums;
+}
+.step-pill-latest {
+  font-size: calc(12 * var(--sp));
+  color: color-mix(in srgb, var(--on-surface-variant) 85%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.step-pill .chev {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--on-surface) 45%, transparent);
+}
+
 /* ------------------------------------------------------------------ thinking (ThinkingAccordion) */
 
 .md-thought {
