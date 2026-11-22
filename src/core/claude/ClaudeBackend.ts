@@ -17,6 +17,7 @@ import { ClaudeSettings } from './ClaudeSettings';
 import { ALLOW_ONCE, PLAN_PREFIX, SUGGESTION_PREFIX } from './approvals';
 import { applyClaudeQuota, claudeQuotaGroups, groupViews, scopedLimits } from './quota';
 import { countdownText } from '../agy/quota';
+import { claudeCrew } from '../crew/engines/claude';
 import {
   PERMISSION_MODES,
   compactTokens,
@@ -1474,6 +1475,7 @@ export class ClaudeBackend implements AgentBackend {
       s.localConversation = this.localConvs.get(req.conversationId)!;
       s.isLoading = false;
     }
+    if (req.setup) s.applyCrew(claudeCrew(req.setup));
     s.sendPrompt(req.text, req.attachments);
     this.changed('conversations');
   }

@@ -12,6 +12,10 @@ import { PhoneAccess } from './core/phone';
 import { agentFlags, BridgeManager, cliPathArgs } from './core/bridge/BridgeManager';
 import { McpHost } from './core/mcp/server';
 import { NotesStore, notesMcp } from './core/mcp/notes';
+import { RoomEngine } from './core/crew/rooms/engine';
+import { groupsMcp } from './core/crew/rooms/mcp';
+import { CrewEngine } from './core/crew/engine';
+import { watchEditorForCrew } from './crewEvents';
 import { themeMcp } from './core/mcp/theme';
 import { setPresetEnv } from './core/mcp/presets';
 import { JarvisEngine } from './core/jarvis/engine';
@@ -41,6 +45,8 @@ let previewReady: Promise<void> | null = null;
 let sidebarView: vscode.WebviewView | undefined;
 /** The count on the AntiGem icon (kept for a side bar that is created later). */
 let badge: vscode.ViewBadge | undefined;
+/** The Crew's status bar item ("Crew: 2 working · 1 needs you"), made when there is something to say. */
+let crewItem: vscode.StatusBarItem | undefined;
 
 const MAX_SELECTION = 40_000;
 const EXCLUDE = '**/{node_modules,.git,dist,build,out,.next,.venv,__pycache__,target}/**';
@@ -430,6 +436,21 @@ export function activate(context: vscode.ExtensionContext) {
         () => openFromNotification(a.conversationId),
         log,
       ),
+    crewStatus: (text, tooltip) => {
+      if (!text) {
+        crewItem?.hide();
+        return;
+      }
+      if (!crewItem) {
+        crewItem = vscode.window.createStatusBarItem('antigem.crew', vscode.StatusBarAlignment.Right, 90);
+        crewItem.name = 'AntiGem Crew';
+        crewItem.command = 'antigem.crew.open';
+        context.subscriptions.push(crewItem);
+      }
+      crewItem.text = `$(organization) ${text}`;
+      crewItem.tooltip = tooltip;
+      crewItem.show();
+    },
     setBadge: (count, tooltip) => {
       badge = count > 0 ? { value: count, tooltip } : undefined;
       if (sidebarView) sidebarView.badge = badge;
@@ -493,6 +514,35 @@ export function activate(context: vscode.ExtensionContext) {
   const jarvis = new JarvisEngine({ host: host.jarvisApi(), store: kv, log, bridge, mcp });
   host.attachJarvis(jarvis);
   mcp.register(jarvisMcp(jarvis));
+  // Crew (docs/crew/PLAN.md): bots with their own persona, tools and DMs; Group chats are its rooms (copied from
+  // ~/.antigem/groups once). crew_mcp: the bots' tools, each call acting as the bot thread that makes it
+  const crew = new CrewEngine({ mcpUrl: (p) => mcp.url(p), mcpHeaders: () => mcp.headers() });
+  host.attachCrew(crew);
+  mcp.register(crew.crew.mcp());
+  mcp.register(crew.adminMcp());
+  // Group chats (now crew rooms): the user and AI bots (any agent / model) in one room; groups_mcp sets them up
+  const groups = new RoomEngine(crew.rooms);
+  host.attachGroups(groups);
+  mcp.register(groupsMcp(groups));
+  crew.removeFromRooms = (id) => groups.removeBotEverywhere(id);
+  crew.onRoomsChanged = () => groups.refresh();
+  crew.roomReport = (roomId, botId, text) => groups.reportTurn(roomId, botId, text);
+  crew.roomNote = (roomId, text) => groups.note(roomId, text);
+  crew.onPause = (ids) => groups.pauseBots(ids);
+  // editor events for automations (saves, problems, failed tasks / tests / commands, git, files)
+  watchEditorForCrew(context, () => crew.automations, log);
+  crew.roomPost = (roomId, botId, text, label) => groups.postAs(roomId, botId, text, label);
+  crew.roomsHook = {
+    create: (i) => groups.create(i),
+    addMember: (r, b) => void groups.addMember(r, b),
+    update: (r, d) => groups.update(r, d),
+    remove: (r) => groups.remove(r),
+    post: (r, t) => groups.post(r, t),
+    busy: (r) => groups.summaries().find((x) => x.id === r)?.active ?? false,
+    transcript: (r, n) => groups.readTranscript(r, n),
+    pause: (r) => groups.pause(r),
+    lines: (r) => groups.find(r)?.messages.map((x) => ({ from: x.from, name: x.name, text: x.text })) ?? [],
+  };
   // Agent memory: memories and chat history the bridge keeps for every agent (Settings → Agents → Agent memory)
   host.attachMemory(new AgentMemory({ bridge, store: kv, log }));
   // custom AntiGem plugins: /mcp?extension=<id>, /extension_developer, settings, `/plu:` (workers run in the port owner)
@@ -613,6 +663,10 @@ export function activate(context: vscode.ExtensionContext) {
       },
       { webviewOptions: { retainContextWhenHidden: true } },
     ),
+    vscode.commands.registerCommand('antigem.crew.open', async () => {
+      await vscode.commands.executeCommand('antigem.chat.focus');
+      host?.openCrew();
+    }),
     vscode.commands.registerCommand('antigem.newChat', () => {
       if (sidebarViewId) host?.newChat(sidebarViewId);
       else void vscode.commands.executeCommand('antigem.chat.focus');

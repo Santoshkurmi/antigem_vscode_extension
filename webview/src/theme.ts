@@ -161,6 +161,12 @@ export const fontScale = () => {
 /** Settings → Appearance → Group Agent Steps (on by default): runs of thinking and tool calls fold into one pill. */
 export const groupAgentSteps = () => uiPrefs()?.groupAgentSteps !== false;
 
+/** Settings → Appearance → Group Agent Steps → Fold after: a run folds with at least this many steps (1–10, default 2). */
+export const groupStepsMin = () => {
+  const v = Math.round(Number(uiPrefs()?.groupStepsMin));
+  return Number.isFinite(v) && v >= 1 ? Math.min(10, v) : 2;
+};
+
 /** Settings → Appearance → Show Message Stats (on by default): the token / cache / time pill under each reply. */
 export const showMessageStats = () => uiPrefs()?.showMessageStats !== false;
 

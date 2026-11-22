@@ -13,6 +13,9 @@ import { themeMcp } from '../src/core/mcp/theme';
 import { setPresetEnv } from '../src/core/mcp/presets';
 import { JarvisEngine } from '../src/core/jarvis/engine';
 import { jarvisMcp } from '../src/core/jarvis/mcp';
+import { RoomEngine } from '../src/core/crew/rooms/engine';
+import { groupsMcp } from '../src/core/crew/rooms/mcp';
+import { CrewEngine } from '../src/core/crew/engine';
 import { AgentMemory } from '../src/core/memory/memory';
 import { BrowserBridge } from '../src/core/browser/bridge';
 import { browserMcp } from '../src/core/browser/mcp';
@@ -178,6 +181,31 @@ mcp.register(themeMcp({ get: () => host.getUiPrefs(), set: (p) => host.patchUiPr
 const jarvis = new JarvisEngine({ host: host.jarvisApi(), store: kv, log, bridge, mcp });
 host.attachJarvis(jarvis);
 mcp.register(jarvisMcp(jarvis));
+// Crew: bots, DMs, rooms (= Group chats, copied once); ANTIGEM_CREW_ROOT / ANTIGEM_GROUPS_DIR point a test elsewhere
+const crew = new CrewEngine({ mcpUrl: (p) => mcp.url(p), mcpHeaders: () => mcp.headers(), root: process.env.ANTIGEM_CREW_ROOT, groupsDir: process.env.ANTIGEM_GROUPS_DIR });
+host.attachCrew(crew);
+mcp.register(crew.crew.mcp());
+mcp.register(crew.adminMcp());
+const groups = new RoomEngine(crew.rooms);
+host.attachGroups(groups);
+mcp.register(groupsMcp(groups));
+crew.removeFromRooms = (id) => groups.removeBotEverywhere(id);
+crew.onRoomsChanged = () => groups.refresh();
+crew.roomReport = (roomId, botId, text) => groups.reportTurn(roomId, botId, text);
+crew.roomNote = (roomId, text) => groups.note(roomId, text);
+crew.onPause = (ids) => groups.pauseBots(ids);
+crew.roomPost = (roomId, botId, text, label) => groups.postAs(roomId, botId, text, label);
+crew.roomsHook = {
+  create: (i) => groups.create(i),
+  addMember: (r, b) => void groups.addMember(r, b),
+  update: (r, d) => groups.update(r, d),
+  remove: (r) => groups.remove(r),
+  post: (r, t) => groups.post(r, t),
+  busy: (r) => groups.summaries().find((x) => x.id === r)?.active ?? false,
+  transcript: (r, n) => groups.readTranscript(r, n),
+  pause: (r) => groups.pause(r),
+  lines: (r) => groups.find(r)?.messages.map((x) => ({ from: x.from, name: x.name, text: x.text })) ?? [],
+};
 // Agent memory: memories and chat history the bridge keeps for every agent
 host.attachMemory(new AgentMemory({ bridge, store: kv, log }));
 const plugins = setupPlugins(host, { bridge, store: kv, log, mcp, platform });

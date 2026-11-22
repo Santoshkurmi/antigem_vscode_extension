@@ -37,6 +37,34 @@ export interface SendRequest {
   effort?: string | null;
   /** A new Claude chat's extended thinking. */
   thinking?: boolean | null;
+  /** A Crew bot's chat: its persona, own MCP server and tool limits (src/core/crew). Sent with every message. */
+  setup?: ThreadSetup | null;
+}
+
+/** How much a Crew bot may do (docs/crew/PLAN.md §11). */
+export type CrewAccess = 'talk' | 'read' | 'edit' | 'auto' | 'full';
+
+/**
+ * A Crew bot's chat setup. Each backend applies it as hard as its engine allows (src/core/crew/engines/caps.ts):
+ * Claude = process flags, Codex = thread config, OpenCode = a hidden agent, Antigravity = a global MCP entry and a
+ * hidden persona block in the message (it has no per-chat setup).
+ */
+export interface ThreadSetup {
+  /** Names the engine-side things made for it (OpenCode agent "crew-<id>"). */
+  id: string;
+  /** Hash of everything below: a different key = the setup changed and is applied again. */
+  key: string;
+  /** Persona + crew rules (the system prompt part). */
+  instructions: string;
+  /** Its own MCP servers (the crew server with the caller's identity in the URL). */
+  mcp: { name: string; url: string; headers: Record<string, string> }[];
+  /** OpenCode / Antigravity: the one crew server every bot shares (OpenCode names the calling chat; AGY bots pass a cap). */
+  sharedMcp?: { url: string; headers: Record<string, string> } | null;
+  access: CrewAccess;
+  /** Only the MCP servers above, none of the user's own. */
+  onlyOwnMcp: boolean;
+  /** Folders it may read without asking (the crew folder). */
+  addDirs: string[];
 }
 
 /** An agent's settings: its section on the root page and its own pages (ids prefixed with the agent, "agy.mcp"). */

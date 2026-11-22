@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AiModel, ChatAttachment, ChatMessage, Conversation, QueuedMessage, ToolCall } from '../../../shared/model';
 import type { AgentStatus, ApprovalChoiceView, ApprovalView, ModelsState, QuestionView, SlashCommandView } from '../../../shared/protocol';
-import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest } from '../types';
+import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest, ThreadSetup } from '../types';
+import { AGY_CREW_SERVER, softPreamble } from '../crew/engines/agy';
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { GrpcClient, GrpcError } from './grpc';
 import { HubRpc, decodeAs, encodeAs, lengthDelimited, patchMessage, rawFields } from './proto';
@@ -606,6 +607,8 @@ export class AgyBackend implements AgentBackend {
   private readyWaiters: Array<() => void> = [];
   private pollTimer: NodeJS.Timeout | null = null;
   private notifyFn: (level: 'info' | 'warning' | 'error', message: string) => void = () => undefined;
+  /** The crew server address already checked in mcp_config.json (crewPreamble). */
+  private crewMcpChecked: string | null = null;
   /** Per chat, from the summaries: raw ConversationAnnotations bytes (archive writes them back whole). */
   private rawAnnotations = new Map<string, Uint8Array>();
   /** Per chat, from the summaries: the hub's summary text and background work. */
@@ -1410,9 +1413,12 @@ export class AgyBackend implements AgentBackend {
     s.error = null;
     s.scheduleEmit();
 
+    // a Crew bot's chat: Antigravity has no per-chat setup, so the crew server is one global MCP entry and the
+    // persona goes in a hidden block in front of the message (first message, and again after a change)
+    const crewBlock = req.setup ? await this.crewPreamble(req.conversationId, req.setup) : '';
     // files by path go to the agent as a hidden list in the text (never as Media.uri: the hub moves such files);
     // images go inline (and as a hub artifact copy, as the app does)
-    const { text, media } = await this.buildPayload(req.text, req.attachments);
+    const { text, media } = await this.buildPayload(crewBlock + req.text, req.attachments);
     let stage: 'start' | 'send' = 'start';
     try {
       await this.ensureOnHub(s, modelId, workspaceUri);
@@ -1431,6 +1437,7 @@ export class AgyBackend implements AgentBackend {
           await this.call('SendUserCascadeMessage', sendReq);
         } else throw e;
       }
+      if (req.setup && crewBlock) this.store.set('agy.crewKeys', { ...(this.store.get<Record<string, string>>('agy.crewKeys') ?? {}), [req.conversationId]: req.setup.key });
     } catch (e) {
       const msg = errText(e);
       this.log(`[agy] send: ${msg}`);
@@ -1446,6 +1453,28 @@ export class AgyBackend implements AgentBackend {
       }
       s.scheduleEmit();
     }
+  }
+
+  /**
+   * A Crew bot's message: the crew server is in mcp_config.json (checked once per address), and the hidden persona
+   * block when this chat has not had this setup yet.
+   */
+  private async crewPreamble(conversationId: string, setup: ThreadSetup): Promise<string> {
+    if (setup.sharedMcp) {
+      const want = JSON.stringify(setup.sharedMcp);
+      if (this.crewMcpChecked !== want) {
+        try {
+          if (await this.settings.ensureMcpServer(AGY_CREW_SERVER, { serverUrl: setup.sharedMcp.url, headers: setup.sharedMcp.headers })) {
+            this.notify('info', 'Added the AntiGem Crew server to Antigravity’s MCP servers (its crew bots need it)');
+          }
+          this.crewMcpChecked = want;
+        } catch (e) {
+          this.log(`[agy] crew MCP server: ${errText(e)}`);
+        }
+      }
+    }
+    const keys = this.store.get<Record<string, string>>('agy.crewKeys') ?? {};
+    return keys[conversationId] === setup.key ? '' : softPreamble(setup);
   }
 
   /** A chat only this window knows (nothing reached the hub): not running any more. */

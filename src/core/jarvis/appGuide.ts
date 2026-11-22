@@ -106,10 +106,11 @@ your code. Ctrl+Alt+G focuses the chat. Jarvis opens files (jarvis_ide_open_file
     keywords: ['theme', 'dark', 'light', 'font', 'size', 'appearance', 'look'],
     text: `
 Settings → Appearance: the mode (Auto follows VS Code, Light, Dark), the light and the dark theme from the gallery, the chat
-text size, Group Agent Steps (on by default: runs of thinking and tool calls fold into one progress pill; off: every step is a
-card) and Show Message Stats (token / cache / time under replies). Grouping the chat list by project is the folder icon at
-the top of the drawer. Jarvis switches them with jarvis_set_setting (theme_mode, chat_font_scale, group_agent_steps,
-show_message_stats) when the user allowed app settings. New
+text size, Group Agent Steps (on by default: runs of thinking and tool calls fold into one progress pill once a run has
+"Fold after" steps, 2+ by default, 1+ = every run; off: every step is a card) and Show Message Stats (token / cache / time
+under replies). Grouping the chat list by project is the folder icon at the top of the drawer. Jarvis switches them with
+jarvis_set_setting (theme_mode, chat_font_scale, group_agent_steps, group_steps_min, show_message_stats) when the user
+allowed app settings. New
 themes are made by any chat with the Theme MCP (Theme preset on an agent's MCP page): "create a neon cyberpunk dark theme".
 `.trim(),
   },

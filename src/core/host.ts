@@ -11,6 +11,7 @@ import { ChatNotifier, type ChatAlert } from './notifications';
 import { absPath, baseName, expandHome, folderKey, pathToUri, tildePath, uriToPath } from './paths';
 import type { NotesStore } from './mcp/notes';
 import type { JarvisHooks, JarvisHostApi } from './jarvis/types';
+import type { GroupsHooks } from './crew/rooms/types';
 import type { BrowserHooks } from './browser/settings';
 import type { PluginHooks } from './plugins/types';
 import type { MemoryHooks } from './memory/types';
@@ -18,13 +19,14 @@ import { selectionBlock } from './text';
 import { defaultCliPaths } from './bridge/BridgeManager';
 import type { PreviewServer } from './preview/server';
 import type { PhoneAccess } from './phone';
-import type { AgentBackend, ChatState, KeyValueStore, Logger } from './types';
+import type { AgentBackend, ChatState, KeyValueStore, Logger, SendRequest } from './types';
 import { RenderBundle } from './render/bundle';
 import { stemAction, stemChange, stemSettingsPage } from './render/settings';
 import { EgmManager } from './egm/manager';
 import { egmAction, egmChange, egmGuide, egmPage, egmRootItem } from './egm/settings';
 import { setupChatRequest, slashFolderOf } from './skills';
 import { checkpoints, CheckpointsHost, isCheckpointPage } from './checkpoints';
+import type { CrewEngine } from './crew/engine';
 
 /** What the embedding environment (VS Code or the dev server) provides. */
 const IMAGE_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp' };
@@ -83,6 +85,8 @@ export interface Platform {
   choose?(message: string, options: string[]): Promise<string | undefined>;
   /** A system notification (VS Code toast), optionally with one action button. */
   notify?(message: string, action?: { label: string; run: () => void }): void;
+  /** The Crew's status bar item ("Crew: 2 working · 1 needs you"); null = hide it. Clicking it opens the Crew. */
+  crewStatus?(text: string | null, tooltip: string): void;
   /** The VS Code window has the focus (absent = always). */
   windowFocused?(): boolean;
   /** A chat alert as a VS Code pop-up; [open] shows the chat (its "Open" button). */
@@ -356,6 +360,86 @@ export class AppHost {
     this.jarvis = j;
     this.broadcast({ type: 'jarvis', state: j.snapshot(), full: true });
     this.broadcast({ type: 'conversations', conversations: this.allConversations() });
+  }
+
+  // ------------------------------------------------------------------ Group chats (src/core/groups)
+
+  private groups: GroupsHooks | null = null;
+
+  /** Group chats: the user and AI bots in one room; each bot's hidden chat stays out of the chat list. */
+  attachGroups(g: GroupsHooks) {
+    this.groups = g;
+    const lastView = () => {
+      const id = this.activeViewId();
+      return id ? (this.views.get(id) ?? null) : null;
+    };
+    g.bind({
+      backend: (k) => this.backendFor(k),
+      enabledKinds: () => this.enabledKinds(),
+      conversations: () => this.rawConversations(),
+      defaultAgent: () => this.defaultAgent(),
+      workspaceFolder: () => this.platform.workspaceFolders()[0]?.path ?? null,
+      showChat: (id, agent) => {
+        const v = lastView();
+        if (!v) return;
+        this.show(v, id, agent);
+        v.port.post({ type: 'jarvisNavigate', screen: 'chat', conversationId: id, settingsPage: null });
+      },
+      postActive: (msg) => lastView()?.port.post(msg),
+      refreshConversations: () => this.broadcast({ type: 'conversations', conversations: this.allConversations() }),
+      pickFolder: () => this.platform.pickFolder(),
+      confirm: (m, a) => this.platform.confirm(m, a),
+      log: (l) => this.log(`[groups] ${l}`),
+      // rooms run on the crew: members are crew bots, each turn is that crew bot's (persona, crew tools, access)
+      crew: () => this.crew?.roomApi() ?? null,
+    });
+  }
+
+  // ------------------------------------------------------------------ Crew (src/core/crew)
+
+  private crew: CrewEngine | null = null;
+
+  /** Shows the Crew screen (status bar click, a crew toast) in the view used last. */
+  openCrew() {
+    const id = this.activeViewId();
+    const v = id ? this.views.get(id) : undefined;
+    v?.port.post({ type: 'crewNavigate', botId: null });
+  }
+
+  /** Crew: bots, their DMs (normal chats drawn with the bot's face, sent with its setup) and the Crew screen. */
+  attachCrew(c: CrewEngine) {
+    this.crew = c;
+    const lastView = () => {
+      const id = this.activeViewId();
+      return id ? (this.views.get(id) ?? null) : null;
+    };
+    c.bind({
+      backend: (k) => this.backendFor(k),
+      enabledKinds: () => this.enabledKinds(),
+      defaultAgent: () => this.defaultAgent(),
+      workspaceFolder: () => this.platform.workspaceFolders()[0]?.path ?? null,
+      showChat: (id, agent) => {
+        const v = lastView();
+        if (!v) return;
+        this.show(v, id, agent);
+        v.port.post({ type: 'jarvisNavigate', screen: 'chat', conversationId: id, settingsPage: null });
+      },
+      postActive: (msg) => lastView()?.port.post(msg),
+      refreshConversations: () => this.broadcast({ type: 'conversations', conversations: this.allConversations() }),
+      pickFolder: () => this.platform.pickFolder(),
+      confirm: (m, a) => this.platform.confirm(m, a),
+      openFile: (p) => this.platform.openFile(p),
+      openUrl: (u) => this.platform.openUrl(u),
+      isRunning: (k, id) => !!this.backendFor(k)?.conversations().find((c) => c.id === id)?.isRunning,
+      notify: (text, open) => this.platform.notify?.(text, { label: 'Open', run: open }),
+      saveText: (name, content) => this.platform.saveText(name, content),
+      status: (st, text) => {
+        const tip = st.needsYou ? `${st.needsYou} thing${st.needsYou === 1 ? '' : 's'} in the Crew Inbox` : '';
+        this.platform.crewStatus?.(text, text ? `${tip ? `${tip} · ` : ''}Click to open the Crew` : '');
+        this.notifier.setCrew(st.needsYou, tip);
+      },
+      log: (l) => this.log(l),
+    });
   }
 
   /** What the Jarvis engine may use of the host. */
@@ -776,7 +860,12 @@ export class AppHost {
   }
 
   private allConversations(): Conversation[] {
-    const list = this.rawConversations();
+    let list = this.rawConversations();
+    // a group chat bot's own chat is never listed (the group's member menu opens it)
+    const groups = this.groups;
+    if (groups) list = list.map((c) => (groups.isBotChat(c.id) ? { ...c, groupBot: true } : c));
+    // a crew DM carries its bot's face (the drawer leaves it to the Crew screen)
+    if (this.crew) list = this.crew.decorate(list);
     return this.jarvis ? this.jarvis.decorateConversations(list) : list;
   }
 
@@ -785,6 +874,11 @@ export class AppHost {
     return this.active()
       .flatMap((b) => b.conversations())
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** An enabled agent's backend (the Crew runs bot chats on it). */
+  agentBackend(agent: AgentKind): AgentBackend | undefined {
+    return this.backendFor(agent);
   }
 
   private backendFor(agent: AgentKind | undefined): AgentBackend | undefined {
@@ -820,6 +914,8 @@ export class AppHost {
     const v = this.views.get(id);
     v?.unsubscribe?.();
     this.views.delete(id);
+    this.groups?.forgetView(id);
+    this.crew?.forgetView(id);
     this.checkpoints.forgetView(id);
   }
 
@@ -1020,7 +1116,7 @@ export class AppHost {
         // (and EGM's commands tell Jarvis to run the reviewers as task chats)
         const expanded = this.settings.expand(withSel, this.jarvis?.isJarvisTarget(msg.conversationId, msg.isNew, msg.jarvis === true) ?? false);
         const jarvisText = this.jarvis?.wrapSend(msg.conversationId, msg.agent, expanded, msg.isNew, msg.jarvis === true) ?? null;
-        const req = {
+        let req: SendRequest = {
           conversationId: msg.conversationId,
           isNew: msg.isNew,
           text: jarvisText ?? this.settings.wrap(expanded, msg.isNew, msg.conversationId, msg.agent),
@@ -1028,6 +1124,8 @@ export class AppHost {
           modelId: msg.modelId,
           workspaceUri: msg.workspaceUri ?? this.platform.workspaceFolders()[0]?.uri ?? null,
         };
+        // a crew DM: the bot's setup (persona, crew tools, access), and its model / folder when the chat starts
+        if (this.crew) req = this.crew.prepareSend(req, msg.agent, msg.crewThread);
         // Agent memory (src/core/memory): a normal chat's first message also carries the memory text (it waits briefly)
         await (this.memory && jarvisText == null ? this.memory.send(req, msg.agent, msg.text, (r) => backend.send(r)) : backend.send(req));
         return;
@@ -1269,6 +1367,25 @@ export class AppHost {
       case 'setQuotaGroup':
         this.backendFor(msg.agent)?.setQuotaGroup?.(msg.modelId, msg.group);
         return;
+      case 'groupWatch':
+      case 'groupAction':
+      case 'groupSend': {
+        if (!this.groups) throw new Error('Group chats are not available in this window');
+        const r = await this.groups.handle(v.id, (m) => v.port.post(m), msg);
+        if (r) this.toast(v, 'info', r);
+        return;
+      }
+      case 'crewWatch':
+      case 'crewAction':
+      case 'jobsWatch':
+      case 'jobAction':
+      case 'inboxWatch':
+      case 'inboxAnswer': {
+        if (!this.crew) throw new Error('The Crew is not available in this window');
+        const r = await this.crew.handle(v.id, (m) => v.port.post(m), msg);
+        if (r) this.toast(v, 'info', r);
+        return;
+      }
       case 'requestJarvis':
         if (this.jarvis) v.port.post({ type: 'jarvis', state: this.jarvis.snapshot(), full: true });
         return;
@@ -1514,6 +1631,8 @@ export class AppHost {
     for (const v of this.views.values()) v.unsubscribe?.();
     this.views.clear();
     this.jarvis?.dispose();
+    this.groups?.dispose();
+    this.crew?.dispose();
     this.plugins?.dispose();
     this.checkpoints.dispose();
     this.memory?.dispose();

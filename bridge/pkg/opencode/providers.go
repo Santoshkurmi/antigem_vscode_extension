@@ -169,7 +169,15 @@ func (m *Manager) writeConfig() error {
 	if !lmstudioTaken {
 		cfg["disabled_providers"] = []string{"lmstudio"}
 	}
-	if servers, err := m.loadMcp(); err == nil && len(servers) > 0 {
+	servers, err := m.loadMcp()
+	if err != nil {
+		servers = map[string]json.RawMessage{}
+	}
+	// Crew bots: their hidden agents and the crew MCP server (crew.go)
+	if crew, err := m.loadCrew(); err == nil {
+		mergeCrew(cfg, servers, crew)
+	}
+	if len(servers) > 0 {
 		cfg["mcp"] = map[string]interface{}{"servers": servers}
 	}
 	return writePrivate(m.configPath(), cfg)

@@ -25,6 +25,9 @@ import { clearCodeState } from './components/CodeBlock';
 import { chooseFirstAgents, firstRun, openLinkedConversation, send, setState, state } from './state/store';
 import { FirstRunAgents } from './components/AgentSetup';
 import { NotesScreen, setNotesOpen } from './components/Notes';
+import { GroupsScreen } from './components/Groups';
+import { setGroupsOpen } from './state/groups';
+import { CrewChatHeader } from './components/Crew';
 import { JarvisCommandStrip } from './components/JarvisCommand';
 import { JarvisOverlay } from './components/JarvisOverlay';
 import { JarvisPanel } from './components/JarvisPanel';
@@ -92,6 +95,8 @@ export function App() {
       <div class="screen">
         <TopBar onMenu={() => setDrawerOpen(true)} />
         <main class="column">
+          {/* a crew bot's DM: the bot's face, role and access */}
+          <CrewChatHeader />
           <div class="feed-area">
             <Feed />
             <ComposerPopups />
@@ -110,8 +115,14 @@ export function App() {
           <InputBar />
         </main>
       </div>
-      <Drawer open={drawerOpen()} onClose={() => setDrawerOpen(false)} onNotes={() => (setDrawerOpen(false), setNotesOpen(true))} />
+      <Drawer
+        open={drawerOpen()}
+        onClose={() => setDrawerOpen(false)}
+        onNotes={() => (setDrawerOpen(false), setNotesOpen(true))}
+        onGroups={() => (setDrawerOpen(false), setNotesOpen(false), setGroupsOpen(true))}
+      />
       <NotesScreen />
+      <GroupsScreen />
       <JarvisOverlay />
       <SettingsScreen />
       <ModelSheet />

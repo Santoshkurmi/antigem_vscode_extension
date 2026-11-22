@@ -375,6 +375,8 @@ func (m *Manager) serveSessionWS(w http.ResponseWriter, r *http.Request) {
 			var o SpawnOptions
 			_ = json.Unmarshal(msg, &o)
 			sess.Configure(o)
+			// a Crew bot whose setup changed: its next prompt starts a process on the new one
+			sess.RestartForCrew()
 		case "bridge_restart":
 			// options of the new process (another provider), applied by the next prompt
 			var o SpawnOptions
@@ -384,6 +386,10 @@ func (m *Manager) serveSessionWS(w http.ResponseWriter, r *http.Request) {
 		case "bridge_kill":
 			sess.Kill()
 		default:
+			if head.Type == "user" {
+				// the setup changed while a turn ran: restart now that it is over
+				sess.RestartForCrew()
+			}
 			if err := sess.Write(msg); err != nil {
 				sub.send(errorMessage(err.Error()))
 			}

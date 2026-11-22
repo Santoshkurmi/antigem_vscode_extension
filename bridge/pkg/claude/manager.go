@@ -54,6 +54,8 @@ type SpawnOptions struct {
 	ResumeSessionAt string `json:"resume_session_at,omitempty"`
 	// Thinking is "on" or "off".
 	Thinking string `json:"thinking,omitempty"`
+	// Crew: a Crew bot's persona, own MCP servers and tool limits (crew.go); a setup with an empty key removes it.
+	Crew *CrewSpawn `json:"crew,omitempty"`
 }
 
 // Manager owns all Claude sessions of this bridge.
@@ -261,6 +263,8 @@ type Session struct {
 	rewindPending bool
 	// quietExit: the process is being stopped to restart on other settings (another provider), not an exit
 	quietExit bool
+	// crewKey: the crew setup the live process was started with ("" = none)
+	crewKey string
 }
 
 // HistoryCut is the rewind point of the live process, if it was started at one.
@@ -315,6 +319,13 @@ func (s *Session) Configure(o SpawnOptions) {
 	}
 	if o.Thinking != "" {
 		s.opts.Thinking = o.Thinking
+	}
+	if o.Crew != nil {
+		if o.Crew.Key == "" {
+			s.opts.Crew = nil
+		} else {
+			s.opts.Crew = o.Crew
+		}
 	}
 }
 
@@ -411,6 +422,13 @@ func (s *Session) spawnLocked() error {
 			args = append(args, "--add-dir", mem)
 		}
 	}
+	if s.opts.Crew != nil {
+		crew, err := s.mgr.crewArgs(s.ID, s.opts.Crew)
+		if err != nil {
+			return fmt.Errorf("crew setup: %w", err)
+		}
+		args = append(args, crew...)
+	}
 
 	transcript := s.mgr.FindTranscript(s.ID)
 	rewindAt, rewinding := s.mgr.rewindPoint(s.ID)
@@ -478,6 +496,7 @@ func (s *Session) spawnLocked() error {
 	s.stderrTail = nil
 	s.historyCut = nil
 	s.quietExit = false
+	s.crewKey = crewKeyOf(s.opts.Crew)
 	s.rewindPending = rewinding
 	if rewinding {
 		s.historyCut = &rewindAt

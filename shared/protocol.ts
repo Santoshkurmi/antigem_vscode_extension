@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ChoiceQuestionnaire,
   Conversation,
+  CrewChatTag,
   QueuedMessage,
 } from './model';
 
@@ -686,6 +687,472 @@ export interface MemoryAppliedView {
   at?: number;
 }
 
+// ------------------------------------------------------------------------------------------------ Group chats
+
+/**
+ * Group chats (src/core/groups): the user and several AI bots in one room. Each bot is its own hidden chat on any
+ * agent / model; the room only carries what they say (never their thinking or tool calls).
+ */
+/**
+ * Who answers a message nobody @mentioned (Rooms v2, docs/crew/PLAN.md §7): auto = the best fit (local heuristic, then
+ * the router model, else the lead), mentions = only who is @mentioned (others may chime in), lead = the lead,
+ * everyone = every member, moderator = a model picks 0–2 speakers after every message.
+ */
+export type GroupMode = 'auto' | 'mentions' | 'lead' | 'everyone' | 'moderator';
+/** What a bot may do in its own chat: just talk, also read the group's project, or also edit it. */
+export type GroupBotAccess = 'chat' | 'read' | 'edit';
+
+export interface GroupBotView {
+  id: string;
+  /** Unique in the group; others mention it as @name. */
+  name: string;
+  agent: AgentKind;
+  /** null = the agent's default model. */
+  modelId: string | null;
+  /** Who the bot is and how it talks (sent to it once, with the room rules). */
+  persona: string;
+  /** Avatar: one emoji (or a letter) on [color]. */
+  emoji: string;
+  color: string;
+  /** 0..100: how often it joins in when nobody mentioned it. */
+  chattiness: number;
+  access: GroupBotAccess;
+  /** Reasoning effort of its chat ('default', 'low', 'medium', 'high'); used when its chat starts. */
+  effort: string;
+  /** On hold in this room: skipped; messages for it are kept until it is released. */
+  muted: boolean;
+  /** Its hidden chat (null until it first speaks). */
+  chatId: string | null;
+  /** Its crew role and the words auto routing matches on. */
+  title: string;
+  aliases: string[];
+  /** Messages for it kept while it is on hold. */
+  held: number;
+  /** The voice its messages are read in (null = the default voice). */
+  voice: string | null;
+}
+
+/** A bot replying right now: 'typing' (writing), 'working' (using a tool first) or 'waiting' (busy elsewhere first). */
+export interface GroupTypingView {
+  botId: string;
+  activity: 'typing' | 'working' | 'waiting';
+  /** What it does now ("editing api.ts", "finishing something in #Ops"), changes at most every few seconds. */
+  step?: string | null;
+}
+
+export interface GroupView {
+  id: string;
+  title: string;
+  /** What the group is about (every bot is told). */
+  topic: string;
+  /** What the bots call the user. */
+  userName: string;
+  bots: GroupBotView[];
+  mode: GroupMode;
+  /** The member who answers when nobody else is picked (lead mode; auto mode's fallback). */
+  lead: string | null;
+  /** 'turns' = one speaker at a time; 'parallel' = everyone picked drafts at once (posts land in order). */
+  drafting: 'turns' | 'parallel';
+  /** Turns each member gets per round (1–5; the last one is told to wrap up). */
+  turnsPerMember: number;
+  /** Auto / moderator mode: the agent / model that picks who speaks (null = the lead's agent, its cheapest model). */
+  moderatorAgent: AgentKind | null;
+  moderatorModelId: string | null;
+  /** Your messages sent while a bot speaks: they wait here and go as one turn when it is done. */
+  queue: { id: string; text: string }[];
+  /** The goal the lead drives (status: running | completed | needs-input | blocked | stopped). */
+  goal: { text: string; status: string; turns: number; maxTurns: number; note: string } | null;
+  /** Crew bots that are not members (to add). */
+  others: { id: string; name: string; emoji: string; color: string; title: string; agent: AgentKind }[];
+  /** Bot messages in a row (no user message in between) before the bots wait for the user. */
+  maxBotTurns: number;
+  /** Bots start talking by themselves when the room is quiet for [idleSeconds]. */
+  autoTalk: boolean;
+  idleSeconds: number;
+  /** Folder bots with read / edit access work in (null = a private empty folder). */
+  project: string | null;
+  paused: boolean;
+  /** The bots stopped after maxBotTurns and wait for the user (or Continue). */
+  waiting: boolean;
+  typing: GroupTypingView[];
+  /** One line about what happens now ("Moderator is choosing…"), or null. */
+  status: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface GroupMessageView {
+  id: string;
+  /** 'user', a bot id, 'system' (room news the bots are told: joins, topic) or 'notice' (for the user only). */
+  from: string;
+  /** The sender's name when it was sent (a removed bot keeps its name). */
+  name: string;
+  /** Markdown: code blocks, images (![](path or https)), diagrams… */
+  text: string;
+  at: number;
+  attachments: ChatAttachment[];
+  /** The message it answers (the user replied to a bot). */
+  replyTo?: string | null;
+  /** Why this bot spoke: 'reply' | 'mention' | 'everyone' | 'lead' | 'auto' | 'router' | 'moderator' | 'chime' | 'held' | 'nudge'. */
+  picked?: { by: string; why?: string } | null;
+  /** One line of what the bot did before answering ("ran 3 commands, edited api.ts"). */
+  digest?: string | null;
+  /** The facts behind the digest (commands with exit codes, files changed, failures). */
+  evidence?: string[] | null;
+  /** Tokens of the bot's turn. */
+  usage?: { input: number; output: number; cached: number; costUsd: number | null } | null;
+}
+
+export interface GroupSummaryView {
+  id: string;
+  title: string;
+  topic: string;
+  bots: { name: string; emoji: string; color: string; agent: AgentKind }[];
+  lastText: string;
+  lastName: string;
+  messageCount: number;
+  updatedAt: number;
+  active: boolean;
+}
+
+export type GroupActionKind =
+  /** data: {title, topic?, template?} → the new group opens. */
+  | 'create'
+  /** data: any of title, topic, userName, mode, lead, drafting, turnsPerMember, moderatorAgent, moderatorModelId, maxBotTurns, autoTalk, idleSeconds. */
+  | 'update'
+  | 'delete'
+  /** data: the bot's fields (name required). */
+  | 'addBot'
+  /** botId + data: changed fields. */
+  | 'updateBot'
+  | 'removeBot'
+  | 'pause'
+  | 'resume'
+  /** The bots stopped after maxBotTurns: let them go on. */
+  | 'continue'
+  /** Delete every message and start each bot's memory again. */
+  | 'clear'
+  /** Show a bot's hidden chat (its tool calls, thinking) in the chat view. */
+  | 'openBotChat'
+  /** Make the bot speak now. */
+  | 'nudgeBot'
+  /** Open a new chat with a request to design a group with groups_mcp (data: {agent?, idea?}). */
+  | 'setupWithAI'
+  /** Pick the project folder for bots with read / edit access (data: {clear?: true}). */
+  | 'pickProject'
+  /** botId: add an existing crew bot to the room. */
+  | 'addMember'
+  /** botId: put a member on hold / release it (its kept messages are answered then). */
+  | 'hold'
+  | 'release'
+  /** data: {id}: drop a queued message of yours before it is sent. */
+  | 'unqueue'
+  /** data: {text, maxTurns?} starts a goal the lead drives; {stop: true} stops it; {continue: true} gives it more turns. */
+  | 'goal';
+
+// ------------------------------------------------------------------------------------------------ Crew
+
+/** Crew (src/core/crew, docs/crew/PLAN.md): a bot's profile as the Crew screen shows and edits it. */
+export interface CrewBotView {
+  id: string;
+  /** One word, @-mentionable, unique in the crew. */
+  name: string;
+  title: string;
+  description: string;
+  emoji: string;
+  color: string;
+  agent: AgentKind;
+  /** null = the agent's default model. */
+  modelId: string | null;
+  effort: string;
+  /** talk | read | edit | auto | full */
+  access: string;
+  accessCeiling: string;
+  /** The level it runs at now (raised by the whole-crew switch, capped by the ceiling). */
+  effectiveAccess: string;
+  /** Folder it works in at edit and up (null = the open project). */
+  folder: string | null;
+  chattiness: number;
+  paused: boolean;
+  /** SOUL.md: who it is and how it works (its persona and standing instructions). */
+  soul: string;
+  soulPath: string;
+  /** What its engine cannot enforce at its level (null = all of it is). */
+  softNote: string | null;
+  /** Words that send a room message to it in auto mode (typed, or learned when the user re-asked it). */
+  aliases: string[];
+  /** Where it is answering now ("#Ops", "its DM"), null = free. */
+  busyWhere: string | null;
+  /** What you chose to "always allow" for it ("Bash(git push)", "mcp__github__create_issue"). */
+  rules: string[];
+  /** Its memory: on, capture on (a quick model files new facts), its notes (newest first), its last change (Undo). */
+  memory: { enabled: boolean; capture: boolean; notes: { id: string; text: string; where: string; from: string | null; date: string | null }[]; file: string; undo: { id: string; what: string } | null };
+  /** Its standing goal (null = none): turns used / allowed, paused, waiting until. */
+  goal: { jobId: string; text: string; status: string; turns: number; maxTurns: number; paused: boolean; nextAt: number | null } | null;
+  /** Check before done: null = off, 'auto' = a quick model of another engine, else the checking bot's id. */
+  checkWork: string | null;
+  /** It has its own browser (AntiGem's Browser MCP; Claude Code and Codex). */
+  browser: boolean;
+  /** The voice its room messages are read in (null = the default voice). */
+  voice: string | null;
+  /** What it spent today (null = nothing yet). */
+  today: SpendView | null;
+  /** Its DM chat (null = none yet). */
+  dmChatId: string | null;
+  /** Rooms it is in. */
+  rooms: { id: string; name: string }[];
+  /** It is answering somewhere now. */
+  working: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CrewStateView {
+  bots: CrewBotView[];
+  /** The whole-crew access switch (null = each bot's own level). */
+  crewAccess: string | null;
+  /** The folder the crew lives in (~/.antigem/crew). */
+  root: string;
+  /** What each engine cannot enforce at each level (agent → access → note), for the editor while choosing. */
+  softNotes: Partial<Record<AgentKind, Partial<Record<string, string>>>>;
+  /** Jobs now (the Crew home's Mission Control row). */
+  jobs: JobCountsView;
+  /** Everyone is paused (no room turns, no jobs). */
+  paused: boolean;
+  /** Antigravity's crew server: 'ask' (not decided), 'allowed', 'declined'. */
+  agyCrewServer: string;
+  /** The Chief (null = none). */
+  chiefId: string | null;
+  /** The Chief's recent changes (newest first), each undoable once. */
+  changes: { id: string; at: number; summary: string; undone: boolean }[];
+  /** The Chief's Problems thread has a chat to open. */
+  hasProblems: boolean;
+  /** What every bot knows about you (by: 'you' or the bot that added it). */
+  aboutMe: { id: string; text: string; by: string }[];
+  /** Today's spend, the daily budget (null = none) and why new work waits (null = it does not). */
+  usage: { today: SpendView; caps: { dayTokens: number | null; dayUsd: number | null }; over: string | null };
+  /** The getting-started guide was closed. */
+  tourDone: boolean;
+}
+
+/** Tokens (read + written), dollars (when the engine reports a cost) and turns. */
+export interface SpendView {
+  tokens: number;
+  usd: number;
+  turns: number;
+}
+
+// ------------------------------------------------------------------------------------------------ Crew packages
+
+/** What importing a crew package would make (the review screen). */
+export interface ImportPreviewView {
+  name: string;
+  tagline: string;
+  /** antigem | botmrr | openmaus-json */
+  format: string;
+  /** Where it came from (a URL, the library, pasted text). */
+  from: string;
+  bots: { name: string; from: string; title: string; emoji: string; color: string; access: string; engine: string | null }[];
+  rooms: { name: string; members: string[] }[];
+  chief: string | null;
+  /** MCP servers it needs (you add them yourself). */
+  mcp: { name: string; reason: string }[];
+  /** They arrive paused. */
+  automations: { name: string; bot: string; when: string }[];
+  playbooks: number;
+  /** Secrets taken out. */
+  redacted: number;
+  leftOut: string[];
+  warnings: string[];
+}
+
+// ------------------------------------------------------------------------------------------------ Automations
+
+/** An automation (docs/crew/PLAN.md §13) as its row on the Automations page shows it. */
+export interface AutomationView {
+  id: string;
+  name: string;
+  /** "Every weekday at 09:00, Scout: summarize yesterday's commits → #Ops" */
+  sentence: string;
+  bot: { id: string; name: string; emoji: string; color: string } | null;
+  paused: boolean;
+  /** A one-shot that ran (or a wait that expired). */
+  done: boolean;
+  lastRunAt: number | null;
+  nextRunAt: number | null;
+  /** ok | nothing | failed | needs-input | skipped */
+  lastStatus: string | null;
+  lastResult: string | null;
+  /** "Needs you: …" */
+  needsFix: string | null;
+  skipped: number;
+  /** Webhook automations: where to POST, with "Authorization: Bearer <token>". */
+  webhook: { url: string; token: string } | null;
+  runs: { at: number; status: string; trigger: string; result: string }[];
+  /** Its last change can be undone. */
+  canUndo: boolean;
+  /** Its own hidden chat can be opened. */
+  canOpen: boolean;
+  createdBy: string;
+}
+
+// ------------------------------------------------------------------------------------------------ Inbox
+
+/** One thing a crew bot needs from you (docs/crew/PLAN.md §11). */
+export interface InboxItemView {
+  id: string;
+  /** approval | setup (Antigravity's crew server) | question (a job's NEEDS INPUT) | failed (a job that failed) */
+  kind: string;
+  bot: { id: string; name: string; emoji: string; color: string } | null;
+  /** What it wants ("run the command: git push"). */
+  title: string;
+  /** Where and why it asks ("for Lead's job: deploy · it reaches outside"). */
+  why: string;
+  /** The command / diff / question text. */
+  detail: string | null;
+  /** It sends something out of the machine (asked at every level). */
+  outward: boolean;
+  /** READ | NORMAL | RISKY | OUTWARD */
+  risk: string | null;
+  /** What "Always allow" remembers. */
+  key: string | null;
+  /** Buttons: allow | allow_session | allow_always | deny | add | later | answer | retry | dismiss. */
+  choices: string[];
+  /** Its chat can be opened. */
+  canOpen: boolean;
+  jobId: string | null;
+  /** A DM's request: its card is in the chat too. */
+  inChat: boolean;
+  createdAt: number;
+}
+
+export interface CrewStatusView {
+  /** Bots answering somewhere now. */
+  working: number;
+  /** Inbox items. */
+  needsYou: number;
+  /** Everyone paused. */
+  paused: boolean;
+}
+
+// ------------------------------------------------------------------------------------------------ Mission Control
+
+export interface JobCountsView {
+  /** Jobs running or queued. */
+  working: number;
+  /** Requesters waiting for their teammates. */
+  waiting: number;
+  /** Jobs with a question nobody answered yet. */
+  needsYou: number;
+  /** Trees started in the last day. */
+  today: number;
+}
+
+/** One job (docs/crew/PLAN.md §8) as Mission Control draws it. */
+export interface JobView {
+  id: string;
+  rootId: string;
+  parentId: string | null;
+  depth: number;
+  title: string;
+  brief: string;
+  /** queued | running | needs_input | waiting | resume | done | failed | cancelled */
+  status: string;
+  outcome: string | null;
+  /** Who does it. */
+  bot: { id: string; name: string; emoji: string; color: string } | null;
+  /** Who asked (null = you). */
+  requester: { name: string; emoji: string; color: string } | null;
+  /** work | consult | notify */
+  mode: string;
+  level: string;
+  doneWhen: string | null;
+  question: string | null;
+  answer: string | null;
+  /** Its final words (≤ 2000 characters here). */
+  result: string | null;
+  /** One line of what it did (from its tool calls) and the facts behind it. */
+  digest: string | null;
+  evidence: string[];
+  artifacts: { kind: string; title: string; path?: string; url?: string; text?: string }[];
+  usage: { input: number; output: number; cached: number; costUsd: number | null };
+  /** An acknowledgement only (did not wake its requester). */
+  ack: boolean;
+  /** Its thread can be opened. */
+  canOpen: boolean;
+  /** A bot goal: turns used / allowed, paused, waiting until. */
+  goal: { turns: number; maxTurns: number; paused: boolean; nextAt: number | null } | null;
+  /** Check before done: who checked, checking | pass | issues | cannot, what it found, which round (≤ 3). */
+  check: { by: string; verdict: string; note: string; round: number } | null;
+  createdAt: number;
+  startedAt: number | null;
+  endedAt: number | null;
+  updatedAt: number;
+}
+
+export interface JobTreeView {
+  root: JobView;
+  /** Every job under the root (the root not included), parents before children. */
+  jobs: JobView[];
+  /** Where it started: your message to a bot (person), a room turn (room). */
+  origin: { kind: string; quote: string; roomId: string | null; roomName: string | null };
+  budget: { requests: number; runs: number; wakes: number; failuresInRow: number; limits: { requests: number; runs: number; wakes: number; failuresInRow: number } };
+}
+
+export interface JobsStateView {
+  trees: JobTreeView[];
+  counts: JobCountsView;
+}
+
+export type CrewActionKind =
+  /** data: the bot's fields (name required) → the editor shows the new bot. */
+  | 'createBot'
+  /** botId + data: changed fields (soul included). */
+  | 'updateBot'
+  | 'deleteBot'
+  /** Open the bot's SOUL.md in an editor tab. */
+  | 'openSoul'
+  /** Open (or start) the bot's DM in the chat view. */
+  | 'openDm'
+  /** botId: pick its work folder (data: {clear?: true}). */
+  | 'pickFolder'
+  /** data: {access: string | null}: the whole-crew switch. */
+  | 'setCrewAccess'
+  /** data: {paused: boolean}: pause / resume everyone. */
+  | 'setPaused'
+  /** data: {allow: boolean}: add AntiGem's crew server to Antigravity's MCP servers (or not now). */
+  | 'allowAgyServer'
+  /** botId + data: {key}: stop always allowing this. */
+  | 'forgetRule'
+  /** botId (null = none): make it the Chief. */
+  | 'setChief'
+  /** data: {id}: undo one of the Chief's changes. */
+  | 'undoManage'
+  /** Open the Chief's Problems thread. */
+  | 'openProblems'
+  /** botId + data: {text, maxTurns?}: a standing goal for the bot; {stop: true} stops it. */
+  | 'goal'
+  /** botId + data: {id}: forget one of its notes. */
+  | 'forgetMemory'
+  /** botId + data: {id}: undo its last memory change. */
+  | 'undoMemory'
+  /** botId: open its MEMORY.md in an editor tab. */
+  | 'openMemory'
+  /** data: {text}: add a line about you; {remove: id}: remove one. */
+  | 'aboutMe'
+  /** data: {text?, url?, library?}: what importing that crew would make (answer: crewImport {preview | error}). */
+  | 'importPreview'
+  /** Same data: add it (answer: a toast; the Crew screen follows). */
+  | 'importApply'
+  /** The library of ready-made crews (answer: crewImport {library}). */
+  | 'library'
+  /** data: {botIds?, name?}: save the crew (or some bots) as one Crew package file. */
+  | 'export'
+  /** data: {dayTokens, dayUsd} (0 / empty = no limit): the crew's daily budget. */
+  | 'setCaps'
+  /** data: {done: boolean}: close (or bring back) the getting-started guide. */
+  | 'tourDone';
+
 export type HostToView =
   | {
       type: 'init';
@@ -765,6 +1232,30 @@ export type HostToView =
   | { type: 'jarvisNewChat'; agent: AgentKind; modelId: string | null }
   /** Jarvis (a tool, a notice) wants this view to show a screen: a chat, the notes, or a settings page. */
   | { type: 'jarvisNavigate'; screen: 'chat' | 'notes' | 'settings'; conversationId?: string | null; settingsPage?: string | null }
+  // ---- Group chats (src/core/groups)
+  /** Every group (answer to groupWatch, and again whenever the list changes while the Group chats screen is open). */
+  | { type: 'groupList'; groups: GroupSummaryView[] }
+  /** The watched group's settings, bots and who is typing (null = it was deleted). */
+  | { type: 'groupState'; groupId: string; group: GroupView | null }
+  /** The watched group's messages: `full` = all of them, otherwise new / changed ones to add. */
+  | { type: 'groupMessages'; groupId: string; messages: GroupMessageView[]; full: boolean }
+  /** Open the Group chats screen at this group (null = the list): a tool or a new group asks for it. */
+  | { type: 'groupNavigate'; groupId: string | null }
+  // ---- Crew (src/core/crew)
+  /** The bots and crew settings (answer to crewWatch, and again on every change while the Crew screen is open). */
+  | { type: 'crewState'; crew: CrewStateView }
+  /** Open the Crew screen (at a bot's editor, or the list). */
+  | { type: 'crewNavigate'; botId: string | null }
+  /** Mission Control's job trees (answer to jobsWatch, again on every change while it is open). */
+  | { type: 'jobsState'; jobs: JobsStateView }
+  /** Import: the library, a preview of what a package would make, or why it could not be read. */
+  | { type: 'crewImport'; library?: { id: string; name: string; tagline: string; emojis: string }[]; preview?: ImportPreviewView | null; error?: string | null }
+  /** The Inbox and the crew's status (answer to inboxWatch, again on every change). */
+  | { type: 'crewInbox'; items: InboxItemView[]; status: CrewStatusView }
+  /** The Automations page (answer to automationsWatch, again on every change while it is open). */
+  | { type: 'automationsState'; automations: AutomationView[] }
+  /** Start a new DM chat with a bot: an empty chat of its agent, drawn with its face; its first message is its DM. */
+  | { type: 'crewDm'; agent: AgentKind; tag: CrewChatTag; modelId: string | null }
   // ---- chip details
   /** Answer to setControl {value: 'details'} when the agent describes the chip (see ChipDetailsView). */
   | { type: 'chipDetails'; details: ChipDetailsView };
@@ -787,6 +1278,8 @@ export type ViewToHost =
       workspaceUri: string | null;
       /** Jarvis: a new chat opened with "New Jarvis chat" (jarvisNewChat): it becomes a Jarvis chat. */
       jarvis?: boolean;
+      /** Crew: the first message of a bot's DM (the crew thread it starts). */
+      crewThread?: string | null;
     }
   | { type: 'stop'; conversationId: string }
   | { type: 'approval'; conversationId: string; key: string; choiceId?: string; deny?: boolean; feedback?: string }
@@ -893,6 +1386,32 @@ export type ViewToHost =
   // ---- Agent memory (src/core/memory): answered with memoryResult
   /** A memory chip: what became of its block (`body` = the block's text), or Undo of what it did. */
   | { type: 'memoryRequest'; reqId: string; op: 'applied' | 'undo'; body: string }
+  // ---- Group chats (src/core/groups)
+  /**
+   * The Group chats screen shows the list (groupId null) or a group; `open: false` = the screen closed (the host
+   * stops sending). Answered with groupList (+ groupState and groupMessages {full} for a group).
+   */
+  | { type: 'groupWatch'; groupId: string | null; open: boolean }
+  /** A Group chats button; see GroupActionKind for the fields. */
+  | { type: 'groupAction'; action: GroupActionKind; groupId?: string | null; botId?: string | null; data?: Record<string, unknown> | null }
+  /** The user's message to a group. */
+  | { type: 'groupSend'; groupId: string; text: string; attachments: ChatAttachment[]; replyTo?: string | null }
+  // ---- Crew (src/core/crew)
+  /** The Crew screen opened / closed (the host sends crewState while it is open). */
+  | { type: 'crewWatch'; open: boolean }
+  | { type: 'crewAction'; action: CrewActionKind; botId?: string | null; data?: Record<string, unknown> | null }
+  /** Mission Control opened / closed (the host sends jobsState while it is open). */
+  | { type: 'jobsWatch'; open: boolean }
+  /** The Automations page opened / closed. */
+  | { type: 'automationsWatch'; open: boolean }
+  /** pause / resume / runNow / delete / undo / open (its chat) an automation; new (data: {botId, text}: the bot sets it up in its DM). */
+  | { type: 'automationAction'; action: 'pause' | 'resume' | 'runNow' | 'delete' | 'undo' | 'open' | 'new'; id?: string | null; data?: Record<string, unknown> | null }
+  /** The view wants the Inbox (sent once when it starts; the host then sends crewInbox on every change). */
+  | { type: 'inboxWatch'; open: boolean }
+  /** An Inbox button: allow / allow_session / allow_always / deny (note) / add / later / answer (note = the answer) / retry / dismiss / open. */
+  | { type: 'inboxAnswer'; id: string; choice: string; note?: string | null }
+  /** stop / retry a job; answer its question (data: {answer}); open its thread; open an artifact (data: {index}). */
+  | { type: 'jobAction'; action: 'stop' | 'retry' | 'answer' | 'openThread' | 'openArtifact' | 'resumeGoal'; jobId: string; data?: Record<string, unknown> | null }
   // ---- Jarvis
   /** Ask for the whole Jarvis state (answered with `jarvis {full: true}`; it is also sent on init). */
   | { type: 'requestJarvis' }

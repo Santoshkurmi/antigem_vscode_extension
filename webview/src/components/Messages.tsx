@@ -16,7 +16,7 @@ import { stripMemoryBlocks } from '../state/memory';
 import { Collapse, Dialog, Icon, IconButton } from '../ui/primitives';
 import { compactTokens, formatDuration, shortModelName } from '../util/format';
 import { copyText, send, state } from '../state/store';
-import { groupAgentSteps, showMessageStats, themeMode } from '../theme';
+import { groupAgentSteps, groupStepsMin, showMessageStats, themeMode } from '../theme';
 import { findRuns, isRunOpen, keepsCard, toggleRun, type Step, type StepRun } from '../state/stepGroups';
 import { StepGroupPill } from './StepGroupPill';
 import { findPathMentions, shortName } from '../util/mentions';
@@ -293,7 +293,7 @@ export function AssistantMessage(props: { msg: ChatMessage }) {
     if (hasThought())
       entries.push({ kind: 'thought', text: m().thoughtText!, durationMs: m().thoughtDurationMs ?? null, streaming: m().isStreaming && bs.length === 0 });
     for (const b of bs) entries.push(stepOf(b));
-    return findRuns(m().id, entries, hasThought() ? -1 : 0, m().isStreaming, m().createdAt);
+    return findRuns(m().id, entries, hasThought() ? -1 : 0, m().isStreaming, m().createdAt, groupStepsMin());
   });
   const runAt = (i: number) => runs().find((r) => i >= r.start && i < r.end);
   return (

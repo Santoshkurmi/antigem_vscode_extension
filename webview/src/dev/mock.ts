@@ -6,6 +6,8 @@
 import type { AgentKind, AiModel, ArtifactSnapshot, ChatAttachment, ChatMessage, Conversation, QueuedMessage, ToolCall } from '@shared/model';
 import type { AgentStatus, ApprovalView, ChatPatch, ChipDetailsView, ControlChipView, HostToView, JarvisState, ModelsState, NoteView, QuestionView, SlashCommandView, ViewToHost } from '@shared/protocol';
 import { createMockSettings } from './mockSettings';
+import { createMockGroups } from './mockGroups';
+import { createMockCrew } from './mockCrew';
 import { mockCheckpointRequest, mockRestorePoints } from './mockCheckpoints';
 
 type Post = (m: HostToView) => void;
@@ -897,6 +899,8 @@ export function startMock(post: Post): (m: ViewToHost) => void {
 
   // ---------------------------------------------------------------- view → host
   const mockSettings = createMockSettings(post);
+  const mockGroups = createMockGroups(post);
+  const mockCrew = createMockCrew(post);
   let savedProjects = [WS.api, 'file:///home/dev/projects/old-blog'];
   const jstate = jarvisState();
   let mockNotes: NoteView[] = [
@@ -906,6 +910,8 @@ export function startMock(post: Post): (m: ViewToHost) => void {
   ];
   return (m: ViewToHost) => {
     if (mockSettings.handle(m)) return;
+    if (mockGroups(m)) return;
+    if (mockCrew(m)) return;
     switch (m.type) {
       case 'ready': {
         const view = (params.get('view') as 'sidebar' | 'panel') ?? 'sidebar';

@@ -14,6 +14,7 @@ import { attachedFilesBlock, cleanTitle, displayUserText, type FileRef } from '.
 import { uriToPath } from '../paths';
 import { ClaudeTranscript, questionnaireFrom, withKind } from './ClaudeTranscript';
 import { approvalViews } from './approvals';
+import type { ClaudeCrewSpawn } from '../crew/engines/claude';
 import { contextUsage, limitsOf, providerOf, rawModel, sameLimits, sessionState, str, type BridgeFrame, type ContextUsage, type SpawnConfig } from './protocol';
 import type { ClaudeBackend } from './ClaudeBackend';
 import { checkpoints } from '../checkpoints/client';
@@ -751,6 +752,16 @@ export class ClaudeSession {
       this.ensureConnected();
       this.sendRaw(frame);
     });
+  }
+
+  /**
+   * A Crew bot's setup (persona, own MCP server, tool limits), sent before each of its prompts: the bridge keeps it
+   * as spawn options and restarts the process when its key changed (src/core/crew/engines/claude.ts).
+   */
+  applyCrew(setup: { crew: ClaudeCrewSpawn; permissionMode: string }) {
+    this.permissionMode = setup.permissionMode;
+    this.modeTouched = true;
+    this.sendRaw(JSON.stringify({ type: 'bridge_config', permission_mode: setup.permissionMode, crew: setup.crew }));
   }
 
   /** A prompt the extension answered itself: shown with its reply, never sent to Claude. */

@@ -9,6 +9,7 @@ import type {
   ChatAttachment,
   ChatMessage,
   Conversation,
+  CrewChatTag,
   QueuedMessage,
 } from '@shared/model';
 import type {
@@ -59,6 +60,8 @@ export interface ChatState {
   pending: ChatMessage[];
   /** Bumped when the user sends: the feed jumps to the end. */
   sentTick: number;
+  /** Crew: this (new, empty) chat is a bot's DM; its first message starts the DM (an opened DM has conversation.crew). */
+  crew: CrewChatTag | null;
 }
 
 export interface Toast {
@@ -113,6 +116,7 @@ function emptyChat(conversationId: string | null, agent: AgentKind): ChatState {
     readOnly: null,
     pending: [],
     sentTick: 0,
+    crew: null,
   };
 }
 
@@ -210,7 +214,10 @@ function applyChat(conversationId: string | null, patch: ChatPatch) {
       const sentTick = state.chat.sentTick;
       // a reset for the chat this view just created keeps its unconfirmed prompt until the host lists it
       const pending = conversationId && conversationId === state.chat.conversationId ? state.chat.pending : [];
-      setState('chat', { ...emptyChat(conversationId, agent), sentTick, pending });
+      // a bot's new DM stays one through the host's reset of the same (empty or just started) chat
+      const crew = conversationId === state.chat.conversationId ? state.chat.crew : null;
+      // (with the bot's model in the model pill)
+      setState('chat', { ...emptyChat(conversationId, agent), sentTick, pending, crew, modelId: crew ? state.chat.modelId : null });
       setMessages(reconcile({}));
     }
     if (patch.upserts?.length) {
@@ -442,6 +449,8 @@ export function newChat(agent?: AgentKind) {
 /** The agent picker on the empty screen. */
 export function pickAgent(agent: AgentKind) {
   if (state.chat.conversationId && state.chat.order.length) return;
+  // a bot's new DM runs on the bot's agent: another agent makes it a normal chat
+  if (state.chat.crew && agent !== state.chat.agent) setState('chat', 'crew', null);
   setState('chat', 'agent', agent);
   requestModels(agent);
   send({ type: 'openConversation', id: null, agent });
@@ -503,6 +512,8 @@ export function sendMessage(text: string, attachments: ChatAttachment[]) {
     modelId: currentModelId(agent),
     workspaceUri: chatWorkspaceUri() ?? newChatProjectUri(),
     ...(jarvisFirst ? { jarvis: true } : {}),
+    // a bot's new DM: its first message names the crew thread it starts
+    ...(isNew && state.chat.crew ? { crewThread: state.chat.crew.threadId } : {}),
   });
   if (jarvisFirst) setJarvisDraft(null);
 }

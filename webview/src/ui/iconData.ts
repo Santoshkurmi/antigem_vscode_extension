@@ -100,6 +100,10 @@ import i_verified_user from '@material-design-icons/svg/outlined/verified_user.s
 import i_warning_amber from '@material-design-icons/svg/outlined/warning_amber.svg?raw';
 import i_play_arrow from '@material-design-icons/svg/outlined/play_arrow.svg?raw';
 import i_push_pin from '@material-design-icons/svg/outlined/push_pin.svg?raw';
+import i_reply from '@material-design-icons/svg/outlined/reply.svg?raw';
+import i_pause from '@material-design-icons/svg/outlined/pause.svg?raw';
+import i_account_tree from '@material-design-icons/svg/outlined/account_tree.svg?raw';
+import i_replay from '@material-design-icons/svg/outlined/replay.svg?raw';
 import i_move_down from '@material-design-icons/svg/outlined/move_down.svg?raw';
 import i_shield from '@material-design-icons/svg/outlined/shield.svg?raw';
 import i_checklist from '@material-design-icons/svg/outlined/checklist.svg?raw';
@@ -304,6 +308,10 @@ const raw = {
   warning_amber: i_warning_amber,
   play_arrow: i_play_arrow,
   push_pin: i_push_pin,
+  reply: i_reply,
+  pause: i_pause,
+  account_tree: i_account_tree,
+  replay: i_replay,
   move_down: i_move_down,
 };
 

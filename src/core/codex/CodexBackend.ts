@@ -10,14 +10,14 @@
 // working after a reload): the chat is listed under the view's id, and every id the host passes is resolved to the
 // thread id before talking to Codex.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { AiModel, ChatAttachment, ChatMessage, Conversation, QueuedMessage } from '../../../shared/model';
 import type { AgentStatus, ApprovalView, ChipDetailsView, ControlChipView, DetailTone, ModelsState, QuestionView, SlashCommandView } from '../../../shared/protocol';
-import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest } from '../types';
+import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest, ThreadSetup } from '../types';
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { attachedFilesBlock, cleanTitle, collapseExpansions, displayUserText, extractAttachedFiles, type FileRef } from '../text';
 import { absPath, pathToUri } from '../paths';
@@ -55,6 +55,7 @@ import {
 import { remainingText } from '../agy/settingsKit';
 import { compactTokens, usageTone } from '../claude/protocol';
 import { checkpoints } from '../checkpoints/client';
+import { codexApproval, codexPersonaContext, codexSandboxPolicy, codexThreadParams } from '../crew/engines/codex';
 
 const EMIT_INTERVAL_MS = 33;
 const SOURCES = ['cli', 'vscode', 'exec', 'appServer'];
@@ -1424,7 +1425,7 @@ export class CodexBackend implements AgentBackend {
       }
       this.changed('conversations');
       try {
-        await this.createThread(s, workspace, modelId);
+        await this.createThread(s, workspace, modelId, req.setup ?? null);
       } catch (e) {
         s.turnStartPending = false;
         this.fail(s, clientId, 'Could not start the Codex chat', e);
@@ -1432,6 +1433,18 @@ export class CodexBackend implements AgentBackend {
       }
     }
     const tid = s.threadId!;
+    const setup = req.setup ?? null;
+    if (setup && !isNew) {
+      // a Crew bot's chat: its own MCP server and sandbox are thread config, which a fresh app-server only has
+      // after a resume (turn/start alone loads the thread without them)
+      try {
+        await this.client.rpc('thread/resume', { threadId: tid, ...codexThreadParams(setup), excludeTurns: true });
+      } catch (e) {
+        s.turnStartPending = false;
+        this.fail(s, clientId, 'Could not set the Codex chat up', e);
+        return;
+      }
+    }
     this.running.add(tid);
     this.sentTo.add(tid);
     this.changed('conversations');
@@ -1445,9 +1458,12 @@ export class CodexBackend implements AgentBackend {
       clientUserMessageId: clientId,
       // the model's thinking comes as a summary only when asked for: the chat shows it as the thinking block
       summary: 'detailed',
-      approvalPolicy: approvalPolicy(mode),
-      sandboxPolicy: sandboxPolicy(mode),
+      // a Crew bot runs at its own access level, not the chats' mode
+      approvalPolicy: setup ? codexApproval(setup.access) : approvalPolicy(mode),
+      sandboxPolicy: setup ? codexSandboxPolicy(setup.access) : sandboxPolicy(mode),
     };
+    // a persona edited after the thread started (developerInstructions only count at thread/start)
+    if (setup && this.crewPersonaChanged(tid, setup)) params.additionalContext = codexPersonaContext(setup);
     if (modelId) params.model = modelId;
     if (effort) params.effort = effort;
     if (modelId) params.collaborationMode = { mode: s.planMode ? 'plan' : 'default', settings: { model: modelId, reasoning_effort: effort || null, developer_instructions: null } };
@@ -1464,15 +1480,34 @@ export class CodexBackend implements AgentBackend {
     }
   }
 
+  /**
+   * Whether a Crew bot's persona differs from the one its thread was given (then it goes in as context once). The
+   * persona each thread has is kept by hash in the store.
+   */
+  private crewPersonaChanged(tid: string, setup: ThreadSetup): boolean {
+    const all = { ...(this.store.get<Record<string, string>>('codex.crewPersona') ?? {}) };
+    const hash = createHash('sha256').update(setup.instructions).digest('hex').slice(0, 16);
+    if (all[tid] === hash) return false;
+    const changed = all[tid] !== undefined;
+    all[tid] = hash;
+    const keys = Object.keys(all);
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ALIASES))) delete all[k];
+    this.store.set('codex.crewPersona', all);
+    return changed;
+  }
+
   /** Creates the thread of a new chat now and makes the view's id its alias. */
-  private async createThread(s: CodexSession, workspace: string | null, modelId: string | null): Promise<string> {
+  private async createThread(s: CodexSession, workspace: string | null, modelId: string | null, setup: ThreadSetup | null = null): Promise<string> {
     const mode = this.permissionMode();
     const params: J = { approvalPolicy: approvalPolicy(mode), sandbox: sandboxMode(mode), serviceName: 'AntiGem' };
     if (workspace) params.cwd = workspace;
     if (modelId) params.model = modelId;
+    // a Crew bot's chat: its persona, own MCP server and sandbox
+    if (setup) Object.assign(params, codexThreadParams(setup));
     const res = await this.client.rpc('thread/start', params);
     const tid = str(o(res, 'thread'), 'id');
     if (!tid) throw new Error('Codex did not return a thread');
+    if (setup) this.crewPersonaChanged(tid, setup);
     this.attachThread(s, tid);
     this.setAlias(s.publicId, tid);
     s.createdHere = true;

@@ -77,6 +77,8 @@ they port.
 | `src/core/opencode/` | OpenCode through the bridge's relay to `opencode serve` (REST + SSE). |
 | `src/core/mcp/` | The built-in MCP HTTP server (`server.ts`) plus the Notes and Theme servers and the MCP presets. |
 | `src/core/jarvis/` | Jarvis mode: managers, tasks, events, approval policy and the `/jarvis` MCP server. |
+| `src/core/groups/` | Group chats (now Crew rooms): the user and AI bots in one room. Each bot is a hidden chat of any agent; the engine picks who speaks and forwards only final replies. Stored as crew rooms (`src/core/crew/rooms.ts`; `~/.antigem/groups/` is copied once and kept); the `/groups` MCP server. |
+| `src/core/crew/` | Crew (docs/crew/PLAN.md): bots with their own persona (SOUL.md), engine, model and access; each bot's DM is a normal chat sent with its setup (persona, own `crew` MCP server, tool limits: `SendRequest.setup`, applied by every backend); rooms; `~/.antigem/crew/`; the `/crew` MCP server (caller identity: docs/crew/ENGINES.md). |
 | `src/core/browser/` | The browser link:<ul><li>a Unix-socket server for the native host (`bridge.ts`);</li><li>native-host registration (`nativeHost.ts`);</li><li>the `/browser` MCP server (`mcp.ts`, `tools.ts`).</li></ul> |
 | `src/core/plugins/` | Custom plugins:<ul><li>the plugin manager (`service.ts`);</li><li>repositories (`repos.ts`) and skills;</li><li>`/plu:` expansion;</li><li>the Plugin Developer MCP;</li><li>the forked runtime (`runtime.ts`). `runtime/*.mjs` are the app's plugin runtime files, unchanged.</li></ul> |
 | `shared/` | The contract between host and UI: `model.ts` mirrors the app's `Models.kt`, `protocol.ts` lists every message. |
@@ -110,7 +112,7 @@ they port.
 |---|---|---|
 | `1244` (`antigem.bridgePort`) | Bridge REST + WebSocket | Requests with the token header (see 6.1) |
 | `1245` (`antigem.hubPort`) | Antigravity hub (gRPC) | Requests with the hub's `x-codeium-csrf-token` |
-| `1246` (`antigem.mcpPort`) | Built-in MCP servers: `/notes`, `/theme`, `/jarvis`, `/browser`, `/extension_developer`, `/mcp?extension=<id>` | Requests with the `X-Device-Id` header and **no** `Origin` header (see 6.2) |
+| `1246` (`antigem.mcpPort`) | Built-in MCP servers: `/notes`, `/theme`, `/jarvis`, `/crew`, `/groups`, `/browser`, `/extension_developer`, `/mcp?extension=<id>` | Requests with the `X-Device-Id` header and **no** `Origin` header (see 6.2) |
 | random port | `opencode serve` | The bridge |
 | `$XDG_RUNTIME_DIR/antigem/browser.sock` (fallback `~/.antigem/run/browser.sock`) | Browser link | The current user only (folder `0700`, socket `0600`, owner checked) |
 | Windows: `\\.\pipe\antigem-browser-<random>`, named in `~/.antigem/run/browser.pipe` | Browser link | The current user: a new random name each start, written only in their profile folder; other users get read access to the pipe at most, never write |

@@ -29,7 +29,8 @@ export interface McpServerDef {
   tools(): McpTool[] | Promise<McpTool[]>;
   /** Tools that work but are not listed (legacy names). */
   hiddenTool?(name: string): boolean;
-  call(name: string, args: Record<string, unknown>): Promise<McpResult> | McpResult;
+  /** `ctx.meta`: the call's `_meta` (the engine's own data: OpenCode / Codex say which chat calls). */
+  call(name: string, args: Record<string, unknown>, ctx?: McpCallContext): Promise<McpResult> | McpResult;
   /** Refuse every method but ping with this message (e.g. "Jarvis is turned off"). */
   notReady?(): string | null;
   /** serverInfo.version (default "1.0.0"). */
@@ -39,6 +40,10 @@ export interface McpServerDef {
    * or answers with an HTTP error ({status: 400 | 404, error}).
    */
   resolve?(query: URLSearchParams): Promise<McpServerDef | { status: number; error: string }> | McpServerDef | { status: number; error: string };
+}
+
+export interface McpCallContext {
+  meta: Record<string, unknown> | null;
 }
 
 export const text = (t: string): McpResult => ({ content: [{ type: 'text', text: t }] });
@@ -223,7 +228,7 @@ export class McpHost {
         case 'tools/list':
           return { jsonrpc: '2.0', id, result: { tools: await def.tools() } };
         case 'tools/call': {
-          const params = (msg.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
+          const params = (msg.params ?? {}) as { name?: string; arguments?: Record<string, unknown>; _meta?: unknown };
           const name = String(params.name ?? '');
           const tools = await def.tools();
           if (!tools.some((t) => t.name === name) && !def.hiddenTool?.(name)) {
@@ -231,7 +236,8 @@ export class McpHost {
           }
           const args = { ...(params.arguments ?? {}) };
           if (def.stateful && session) args._mcp_session = session;
-          return { jsonrpc: '2.0', id, result: await def.call(name, args) };
+          const meta = params._meta && typeof params._meta === 'object' ? (params._meta as Record<string, unknown>) : null;
+          return { jsonrpc: '2.0', id, result: await def.call(name, args, { meta }) };
         }
         default:
           return this.rpcError(id, -32601, `Method not found: ${method}`);

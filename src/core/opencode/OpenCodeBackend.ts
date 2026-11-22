@@ -12,7 +12,7 @@ import type { AgentStatus, ApprovalView, ChipDetailsView, ControlChipView, Detai
 import type { BridgeManager } from '../bridge/BridgeManager';
 import { attachedFilesBlock, cleanTitle, collapseExpansions } from '../text';
 import { absPath, baseName, pathToUri } from '../paths';
-import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest } from '../types';
+import type { AgentBackend, BackendChange, ChatState, KeyValueStore, Logger, SendRequest, ThreadSetup } from '../types';
 import { OpenCodeClient, OpenCodeUnavailableError, type OpenCodeStatus } from './client';
 import {
   DEFAULT_AGENTS,
@@ -45,6 +45,7 @@ import {
 import { MAX_RETRIES, OpenCodeTranscript, formToolId, permissionOf, questionnaireOf, safeId, type Permission } from './OpenCodeTranscript';
 import { OpenCodeSettings } from './OpenCodeSettings';
 import { checkpoints } from '../checkpoints/client';
+import { OPENCODE_CREW_SERVER, OPENCODE_CREW_TOOLS, opencodeAgent, opencodeAgentId } from '../crew/engines/opencode';
 import { compactTokens, usageTone } from '../claude/protocol';
 
 const EMIT_INTERVAL_MS = 33;
@@ -1138,10 +1139,20 @@ export class OpenCodeBackend implements AgentBackend {
     const ses = s.id;
     const onServer = this.isServerSession(ses);
     const workspaceUri = req.workspaceUri ? pathToUri(req.workspaceUri) : '';
+    const setup = req.setup ?? null;
+    if (setup) {
+      // a Crew bot's chat runs as its hidden agent (persona + tool limits) with the crew server
+      try {
+        await this.applyCrew(setup);
+      } catch (e) {
+        this.toast(`Could not set the crew bot up in OpenCode: ${errMsg(e)}`, 'error', s);
+        return;
+      }
+    }
     if (!onServer) {
       // a new chat: listed at once (OpenCode lists it once created)
       s.model = req.modelId ?? this.models().selectedId;
-      s.agent = this.prefAgent();
+      s.agent = setup ? opencodeAgentId(setup) : this.prefAgent();
       const first = collapseExpansions(cleanTitle(text) || 'Attachment').split('\n').find((l) => l.trim())?.trim() ?? 'Chat';
       this.localConvs.set(ses, {
         id: ses,
@@ -1179,7 +1190,8 @@ export class OpenCodeBackend implements AgentBackend {
     if (!onServer) {
       const dir = absPath(workspaceUri);
       const ref = modelRefJson(s.model);
-      const perms = rules(this.prefMode(), s.agent);
+      // a crew bot's own agent has its rules (session rules would override them)
+      const perms = setup ? null : rules(this.prefMode(), s.agent);
       const body: Record<string, unknown> = { id: ses };
       if (dir) body.location = { directory: dir };
       if (ref) body.model = ref;
@@ -1217,6 +1229,31 @@ export class OpenCodeBackend implements AgentBackend {
       });
     } catch (e) {
       this.fail(s, msgId, 'OpenCode did not take the message', e, wasActive);
+    }
+  }
+
+  /**
+   * AntiGem's OpenCode config gets the bot's hidden agent and the shared crew server as [setup] says (only when its
+   * key changed; the bridge reloads OpenCode then). A reload reconnects the MCP servers: the turn waits (≤ 5 s) until
+   * the crew server is back, or the bot would start without its tools.
+   */
+  private async applyCrew(setup: ThreadSetup) {
+    const id = opencodeAgentId(setup);
+    const known = this.store.get<Record<string, string>>('opencode.crewAgents') ?? {};
+    if (known[id] === setup.key) return;
+    await this.client.crewChange({
+      agents: { [id]: opencodeAgent(setup) },
+      ...(setup.sharedMcp
+        ? { servers: { [OPENCODE_CREW_SERVER]: { type: 'remote', url: setup.sharedMcp.url, headers: setup.sharedMcp.headers } }, deny: [OPENCODE_CREW_TOOLS] }
+        : {}),
+    });
+    this.store.set('opencode.crewAgents', { ...known, [id]: setup.key });
+    if (!setup.sharedMcp) return;
+    const until = Date.now() + 5000;
+    while (Date.now() < until) {
+      const crew = (await this.client.mcpList().catch(() => [])).find((m) => m.name === OPENCODE_CREW_SERVER);
+      if (crew?.status === 'connected' || crew?.status === 'failed') return;
+      await new Promise((r) => setTimeout(r, 300));
     }
   }
 

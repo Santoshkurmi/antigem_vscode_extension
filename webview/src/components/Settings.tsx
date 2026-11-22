@@ -28,8 +28,7 @@ import { AgentMark } from './AgentStatus';
 import { hasIcon } from '../ui/iconData';
 import { agentAccent, alpha, stateColor } from '../util/format';
 import { ThemesPage, themeName } from './Themes';
-import { fontScale, groupAgentSteps, showMessageStats } from '../theme';
-import { MIN_STEPS, MIN_TOOLS } from '../state/stepGroups';
+import { fontScale, groupAgentSteps, groupStepsMin, showMessageStats } from '../theme';
 import { GemmyPreview, gemmyEnabled, setGemmyEnabled } from './Gemmy';
 import { renderState } from '../state/render';
 import { DOC_PAGE_PREFIX, DocPage } from './DocPage';
@@ -1748,12 +1747,27 @@ function AppearancePage() {
           <div class="item-label">
             <div class="item-title">Group Agent Steps</div>
             <div class="hint">
-              Runs of thinking and tool calls ({MIN_TOOLS}+ tool calls or {MIN_STEPS}+ steps) fold into one pill that shows the
-              progress; click it to see the steps. Off: every step is its own card.
+              Runs of thinking and tool calls in a row fold into one pill that shows the progress; click it to see the steps.
+              Off: every step is its own card.
             </div>
           </div>
           <MSwitch checked={groupAgentSteps()} onChange={(v) => setUiPref('groupAgentSteps', v)} label="Group Agent Steps" />
         </div>
+        {/* how many steps in a row fold (theme.ts groupStepsMin): 1+ = every run, even a single step */}
+        <Show when={groupAgentSteps()}>
+          <div class="fold-after" onClick={(e) => e.stopPropagation()}>
+            <div class="hint">Fold after (steps in a row)</div>
+            <div class="preset-row">
+              <For each={[1, 2, 3, 4, 5, 6]}>
+                {(n) => (
+                  <button class="preset" classList={{ on: groupStepsMin() === n }} onClick={() => setUiPref('groupStepsMin', n)}>
+                    {n}+
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
       </div>
       <div class="settings-card toggle-card" onClick={() => setUiPref('showMessageStats', !showMessageStats())}>
         <div class="toggle-row">

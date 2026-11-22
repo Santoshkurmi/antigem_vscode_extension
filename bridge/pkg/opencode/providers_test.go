@@ -240,3 +240,46 @@ func TestOAuthCallbackForwarding(t *testing.T) {
 		t.Fatalf("non-loopback forwarded: %v", res)
 	}
 }
+
+func TestCrewAgentsAndServerGoIntoTheConfig(t *testing.T) {
+	home := t.TempDir()
+	m := NewManager(home, home, "")
+	doJSON(t, m, http.MethodPut, "/api/opencode/mcp/notes_mcp", `{"type":"remote","url":"http://127.0.0.1:1/notes"}`)
+	res := doJSON(t, m, http.MethodPost, "/api/opencode/crew", `{
+		"agents": {"crew-ada": {"system": "You are Ada.", "mode": "primary", "hidden": true,
+			"permissions": [{"action": "*", "resource": "*", "effect": "deny"}, {"action": "antigem_crew_*", "resource": "*", "effect": "allow"}]}},
+		"servers": {"antigem": {"type": "remote", "url": "http://127.0.0.1:1/crew?engine=opencode"}},
+		"deny": ["antigem_crew_*"]}`)
+	if res["success"] != true {
+		t.Fatalf("crew: %v", res)
+	}
+	if res := doJSON(t, m, http.MethodPost, "/api/opencode/crew", `{"agents": {"build": {"system": "x"}}}`); res["success"] != false {
+		t.Fatalf("a crew change replaced OpenCode's own agent: %v", res)
+	}
+	var cfg struct {
+		Agents      map[string]map[string]interface{} `json:"agents"`
+		Permissions []map[string]string               `json:"permissions"`
+		Mcp         struct {
+			Servers map[string]map[string]interface{} `json:"servers"`
+		} `json:"mcp"`
+	}
+	data, _ := os.ReadFile(m.configPath())
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agents["crew-ada"]["system"] != "You are Ada." || cfg.Agents["crew-ada"]["hidden"] != true {
+		t.Fatalf("agent: %s", data)
+	}
+	if cfg.Mcp.Servers["antigem"] == nil || cfg.Mcp.Servers["notes_mcp"] == nil {
+		t.Fatalf("servers: %s", data)
+	}
+	if len(cfg.Permissions) != 1 || cfg.Permissions[0]["action"] != "antigem_crew_*" || cfg.Permissions[0]["effect"] != "deny" {
+		t.Fatalf("deny: %s", data)
+	}
+	// null removes; the user's server list is untouched
+	doJSON(t, m, http.MethodPost, "/api/opencode/crew", `{"agents": {"crew-ada": null}, "servers": {"antigem": null}, "deny": []}`)
+	data, _ = os.ReadFile(m.configPath())
+	if strings.Contains(string(data), "crew-ada") || strings.Contains(string(data), "antigem_crew") || !strings.Contains(string(data), "notes_mcp") {
+		t.Fatalf("after removal: %s", data)
+	}
+}

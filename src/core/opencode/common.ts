@@ -131,7 +131,8 @@ export function modeIcon(mode: string): string {
 export function rules(mode: string, agent: string): { action: string; resource: string; effect: string }[] | null {
   const rule = (action: string, effect: string, resource = '*') => ({ action, resource, effect });
   const plan = agent === 'plan';
-  if (mode === MODE_AUTO) return [rule('*', 'allow'), ...(plan ? [rule('edit', 'deny')] : [])];
+  // the Crew bots' tools are theirs only (AntiGem's OpenCode config denies them everywhere; "*" would allow them again)
+  if (mode === MODE_AUTO) return [rule('*', 'allow'), ...(plan ? [rule('edit', 'deny')] : []), rule('antigem_crew_*', 'deny')];
   if (mode === MODE_ASK)
     return [
       rule('shell', 'ask'),

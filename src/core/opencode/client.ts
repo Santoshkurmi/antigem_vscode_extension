@@ -331,6 +331,15 @@ export class OpenCodeClient {
     if (o?.success !== true) throw new Error(str(o, 'error') ?? 'Could not save the MCP server');
   }
 
+  /**
+   * Crew bots: adds / replaces (null removes) hidden agents and crew MCP servers of AntiGem's OpenCode config, and
+   * the tool patterns every other chat is denied (bridge/pkg/opencode/crew.go). The bridge reloads the config.
+   */
+  async crewChange(change: { agents?: Record<string, unknown>; servers?: Record<string, unknown>; deny?: string[] }): Promise<void> {
+    const o = await this.executeJson('/crew', { method: 'POST', body: JSON.stringify(change), headers: { 'content-type': 'application/json' } });
+    if (o?.success !== true) throw new Error(str(o, 'error') ?? 'Could not set the crew bot up in OpenCode');
+  }
+
   async removeMcp(name: string): Promise<void> {
     const o = await this.executeJson(`/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' });
     if (o?.success !== true) throw new Error(str(o, 'error') ?? 'Could not remove the MCP server');

@@ -897,6 +897,20 @@ export class AgySettings implements AgentSettingsProvider {
     await this.loadMcp();
   }
 
+  /**
+   * Crew bots on Antigravity need the crew server in mcp_config.json: added, or its address / headers brought up to
+   * date (nothing else is touched). Returns whether it changed (then the hub reconnects its servers).
+   */
+  async ensureMcpServer(name: string, spec: { serverUrl: string; headers: Record<string, string> }): Promise<boolean> {
+    const mcp = await this.mcpForWrite();
+    const have = mcp.config.mcpServers[name];
+    if (have && have.serverUrl === spec.serverUrl && JSON.stringify(have.headers ?? {}) === JSON.stringify(spec.headers)) return false;
+    mcp.config.mcpServers[name] = { ...(have ?? {}), serverUrl: spec.serverUrl, headers: spec.headers };
+    await this.saveMcpConfig();
+    this.changed();
+    return true;
+  }
+
   /** Adds a server from the add form (the custom tile too). */
   private async addServer(values: Record<string, string>): Promise<string> {
     const mcp = await this.mcpForWrite();

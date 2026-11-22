@@ -750,6 +750,10 @@
   color: #fff;
   font-weight: 700;
 }
+.fold-after {
+  margin-top: 12px;
+  cursor: default;
+}
 .preview-card {
   display: flex;
   flex-direction: column;

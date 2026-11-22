@@ -401,6 +401,7 @@ func (m *Manager) DeleteSession(id string) error {
 		s.KillAndWait(6 * time.Second)
 	}
 	m.removeAttachments(id)
+	m.removeCrewFiles(id)
 	m.clearRewind(id)
 	m.rememberSessionModel(id, "")
 	_ = m.SetSessionArchived(id, false)

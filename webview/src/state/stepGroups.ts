@@ -1,15 +1,10 @@
 // Settings → Appearance → Group Agent Steps (the app's StepGroups in ui/chat/ChatFeedCache.kt): a run of a reply's
-// thinking and tool steps (no reply text between them) folds into one pill (StepGroupPill) when it has at least
-// MIN_TOOLS tool calls or MIN_STEPS steps; shorter runs stay as they are. Steps that need the user (an approval, a
-// question), show a picture or are system notices always stay full cards.
+// thinking and tool steps (no reply text between them) folds into one pill (StepGroupPill) when it has at least the
+// "Fold after" number of steps (theme.ts groupStepsMin, default 2; 1 = every run); shorter runs stay as they are.
+// Steps that need the user (an approval, a question), show a picture or are system notices always stay full cards.
 import { createEffect, createRoot, createSignal, on } from 'solid-js';
 import type { ToolCall } from '@shared/model';
 import { state } from './store';
-
-/** A run is folded with at least this many tool calls ... */
-export const MIN_TOOLS = 2;
-/** ... or this many steps (thinking + tool calls). */
-export const MIN_STEPS = 3;
 
 /** One step of a reply: a thought, or a tool call. */
 export type Step =
@@ -52,9 +47,16 @@ const endedAt = new Map<string, number>();
 /**
  * The runs to fold in one reply. [entries]: its steps by block index (null: not a step), the first one at index
  * [first] (-1 when a thought shows before the blocks). [streaming]: the reply is still coming in; [createdAt]: when
- * it started (the first run of a reply starts with it).
+ * it started (the first run of a reply starts with it); [minSteps]: a run folds with at least this many steps.
  */
-export function findRuns(msgId: string, entries: (Step | null)[], first: number, streaming: boolean, createdAt: number): StepRun[] {
+export function findRuns(
+  msgId: string,
+  entries: (Step | null)[],
+  first: number,
+  streaming: boolean,
+  createdAt: number,
+  minSteps: number,
+): StepRun[] {
   const out: StepRun[] = [];
   let firstRun = true;
   let i = 0;
@@ -72,7 +74,7 @@ export function findRuns(msgId: string, entries: (Step | null)[], first: number,
     const end = j + first;
     const atEnd = j === entries.length;
     i = j;
-    if (steps.filter((s) => s.kind === 'tool').length < MIN_TOOLS && steps.length < MIN_STEPS) continue;
+    if (steps.length < minSteps) continue;
     const key = `${msgId}:${start}`;
     // still working: a step runs, or the run is the end of a reply that is still coming in (between two steps)
     const live = steps.some((s) => (s.kind === 'tool' ? s.call.status === 'RUNNING' : s.streaming)) || (streaming && atEnd);

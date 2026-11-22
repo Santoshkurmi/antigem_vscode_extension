@@ -188,6 +188,24 @@ export interface Conversation {
   isJarvis?: boolean;
   /** Jarvis: leave it out of All and the agent tabs (Settings → Jarvis → "Jarvis chats in the chat list"). */
   jarvisHidden?: boolean;
+  /** Group chats: a bot's hidden chat (never listed in the drawer; the group's member menu opens it). */
+  groupBot?: boolean;
+  /** Crew: the user's DM with a crew bot (not listed in the drawer; the Crew screen opens it; the chat shows its face). */
+  crew?: CrewChatTag | null;
+}
+
+/** Crew (src/core/crew): the bot a DM belongs to, drawn above its chat. */
+export interface CrewChatTag {
+  botId: string;
+  threadId: string;
+  name: string;
+  title: string;
+  emoji: string;
+  color: string;
+  /** talk | read | edit | auto | full: what it may do (as it runs now). */
+  access: string;
+  /** What is only asked of the model, not enforced on its engine (null = all enforced). */
+  softNote: string | null;
 }
 
 export interface QueuedMessage {

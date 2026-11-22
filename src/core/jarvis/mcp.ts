@@ -37,6 +37,12 @@ const NO_WAIT_NOTE = 'Do not wait, sleep or poll. Start any other independent ta
 
 const NO_VOICE = 'There is no voice in VS Code: write it in your reply (and ask questions in your reply, then end your turn).';
 
+/** The ui pref groupStepsMin as the chat uses it (webview theme.ts groupStepsMin): 1–10, default 2. */
+const groupStepsMin = (v: unknown) => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 ? Math.min(10, n) : 2;
+};
+
 /** Tools that act for one Jarvis chat (start, steer or stop its work): they must know for certain which chat calls. */
 const ACTING = new Set([
   'jarvis_task_start',
@@ -987,6 +993,7 @@ class JarvisMcp {
           dark_theme: p.darkTheme ?? null,
           chat_font_scale: p.chatFontScale ?? 1,
           group_agent_steps: p.groupAgentSteps !== false,
+          group_steps_min: groupStepsMin(p.groupStepsMin),
           show_message_stats: p.showMessageStats !== false,
         };
         break;
@@ -1319,6 +1326,19 @@ class JarvisMcp {
           },
         }),
       ),
+      {
+        key: 'group_steps_min',
+        about: 'With group_agent_steps on: fold a run of agent thinking and tool calls once it has at least this many steps (1 = every run)',
+        values: '1-10',
+        own: false,
+        get: () => groupStepsMin(j.host.uiPrefs().groupStepsMin),
+        set: (v) => {
+          const n = Number(v.trim().replace(/\+$/, ''));
+          if (!Number.isFinite(n)) return 'Not a number.';
+          j.host.patchUiPrefs({ groupStepsMin: Math.min(10, Math.max(1, Math.round(n))) });
+          return null;
+        },
+      },
       {
         key: 'new_chat_agent',
         about: 'Agent of new chats',

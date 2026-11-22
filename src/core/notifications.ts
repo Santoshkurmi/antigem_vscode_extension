@@ -235,11 +235,21 @@ export class ChatNotifier {
     if (p.inApp) this.d.inApp?.(a);
   }
 
+  /** The Crew's Inbox count joins the badge. */
+  private crew = { count: 0, tip: '' };
+
+  setCrew(count: number, tip: string) {
+    if (count === this.crew.count && tip === this.crew.tip) return;
+    this.crew = { count, tip };
+    this.pushBadge();
+  }
+
   private pushBadge() {
     if (!this.d.setBadge) return;
     const list = [...this.unread.values()];
-    const tip = list.length === 1 ? `${list[0].title} · ${this.d.chatTitle(list[0].conversationId)}` : `${list.length} chats need a look`;
-    this.d.setBadge(this.d.prefs().badge ? list.length : 0, tip);
+    const chats = list.length === 1 ? `${list[0].title} · ${this.d.chatTitle(list[0].conversationId)}` : list.length ? `${list.length} chats need a look` : '';
+    const tip = [chats, this.crew.count ? this.crew.tip : ''].filter(Boolean).join(' · ');
+    this.d.setBadge(this.d.prefs().badge ? list.length + this.crew.count : 0, tip);
   }
 }
 

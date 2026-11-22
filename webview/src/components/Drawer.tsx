@@ -12,6 +12,7 @@ import { JARVIS_CYAN, JarvisBot } from './JarvisBot';
 import { jarvis, jarvisAction, setJarvisPanelOpen } from '../state/jarvis';
 import { exportChat } from '../state/exportFlow';
 import { agentAccent, agentChipLabel, alpha, relativeTime, workspaceName } from '../util/format';
+import { inbox } from '../state/inbox';
 
 /** Group key of the pinned chats when grouping by workspace (can't clash with a folder name). */
 const PINNED_GROUP = '\u0000pinned';
@@ -23,7 +24,7 @@ interface TreeItem {
   expanded: boolean;
 }
 
-export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: () => void }) {
+export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: () => void; onGroups?: () => void }) {
   const [searchOpen, setSearchOpen] = createSignal(false);
   const [query, setQuery] = createSignal('');
   const [expandedParents, setExpandedParents] = createSignal<Set<string>>(new Set());
@@ -69,6 +70,8 @@ export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: ()
     return state.conversations
       // the Jarvis tab lists Jarvis chats; All and the agent tabs leave out the ones the host hides (listMode)
       .filter((c) => (jarvisOn() ? !!c.isJarvis : !c.jarvisHidden))
+      // a room bot's own chat is never listed (the room's member menu opens it), nor a crew DM (the Crew screen does)
+      .filter((c) => !c.groupBot && !c.crew)
       .filter((c) => (a ? c.agent === a : true))
       .filter((c) => archivedIds().has(c.id) === state.ui.showArchived)
       .filter((c) => !q || c.title.toLowerCase().includes(q) || (c.subagentRole ?? '').toLowerCase().includes(q))
@@ -78,7 +81,8 @@ export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: ()
   const deep = useDeepSearch(query);
   const contentHits = createMemo(() => {
     const shown = new Set(filtered().map((c) => c.id));
-    return deep.hits().filter((h) => !shown.has(h.conversationId) && (!filter() || h.agent === filter()));
+    const bots = new Set(state.conversations.filter((c) => c.groupBot || c.crew).map((c) => c.id));
+    return deep.hits().filter((h) => !shown.has(h.conversationId) && !bots.has(h.conversationId) && (!filter() || h.agent === filter()));
   });
   const ids = createMemo(() => new Set(filtered().map((c) => c.id)));
   const childrenOf = createMemo(() => {
@@ -442,6 +446,10 @@ export function Drawer(props: { open: boolean; onClose: () => void; onNotes?: ()
             {/* Notes & to-do lists (the app's floating switcher entry) */}
             <button class="footer-btn" title="Notes" onClick={() => props.onNotes?.()}>
               <Icon name="edit_note" size={21} />
+            </button>
+            {/* Crew: bots (each with its DM) and rooms (group chats with several bots) */}
+            <button class="footer-btn" title={inbox.items.length ? `Crew: ${inbox.items.length} need${inbox.items.length === 1 ? 's' : ''} you` : 'Crew'} classList={{ 'crew-needs': inbox.items.length > 0 }} onClick={() => props.onGroups?.()}>
+              <Icon name="forum" size={20} />
             </button>
             {/* the Jarvis panel (tasks, activity, stop all) while Jarvis is on */}
             <Show when={jarvis.enabled}>

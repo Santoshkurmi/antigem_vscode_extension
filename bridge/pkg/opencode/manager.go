@@ -497,6 +497,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.handleOAuthCallback(w, r)
 	case path == "/credentials" && r.Method == http.MethodGet:
 		m.handleCredentials(w, r)
+	case path == "/crew":
+		m.handleCrew(w, r)
 	case path == "/mcp" || strings.HasPrefix(path, "/mcp/"):
 		m.handleMcp(w, r, strings.Trim(strings.TrimPrefix(path, "/mcp"), "/"))
 	case path == "/cli/job" || strings.HasPrefix(path, "/cli/"):

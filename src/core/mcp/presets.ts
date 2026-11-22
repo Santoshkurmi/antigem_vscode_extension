@@ -87,6 +87,8 @@ export function mcpPresets(): McpPreset[] {
     builtIn('browser', 'Browser', 'Control Chrome via the AntiGem extension', 'language', '#3B82F6', 'browser_mcp', '/browser'),
     builtIn('notes', 'Notes & To-dos', 'Read & edit your notes', 'edit_note', 'warning', 'notes_mcp', '/notes'),
     builtIn('jarvis', 'Jarvis', 'Let Jarvis run tasks with your agents', 'record_voice_over', '#14B8A6', 'jarvis_mcp', '/jarvis'),
+    builtIn('groups', 'Group Chat', 'Create AI group chats & characters', 'forum', '#F59E0B', 'groups_mcp', '/groups'),
+    builtIn('crew_admin', 'AntiGem Crew', 'Send work to your crew, wait for its reports, import crews', 'account_tree', '#6366F1', 'crew_admin', '/crew-admin'),
     builtIn('theme', 'Theme', 'Create & switch app themes', 'palette', 'tertiary', 'theme_mcp', '/theme'),
     {
       id: 'stitch',
